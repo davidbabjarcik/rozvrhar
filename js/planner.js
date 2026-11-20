@@ -15,10 +15,17 @@ export const CLASS_TYPES = {
   P: 'Prednáška', C: 'Cvičenie', L: 'Laboratórium', S: 'Seminár', '?': 'Iné',
 };
 
-/** Days of preparation needed for an exam (user value or derived from difficulty). */
+let defaultPrep = 0;
+/** Study days for every exam, unless a subject sets its own (0 = by difficulty). */
+export function setDefaultPrepDays(n) {
+  defaultPrep = Number(n) > 0 ? Number(n) : 0;
+}
+
+/** Days of preparation needed for an exam (subject value, global setting, or by difficulty). */
 export function examPrepDays(subject) {
   const v = Number(subject.prepDays);
   if (v > 0) return v;
+  if (defaultPrep > 0) return defaultPrep;
   const d = Number(subject.difficulty) || 3;
   return [2, 3, 4, 6, 8][Math.max(1, Math.min(5, d)) - 1];
 }
@@ -269,7 +276,8 @@ export function studyPlan(rows, sem) {
   const examDays = new Set(rows.map((r) => r.exam.date));
   const sorted = rows.slice().sort((a, b) => a.exam.date.localeCompare(b.exam.date));
   const tasks = [];
-  let floor = isISO(sem.examStart) ? addDays(sem.examStart, -7) : addDays(sorted[0]?.exam.date || '2000-01-01', -10);
+  // Before the first exam there is no limit; later ones start after the previous exam.
+  let floor = addDays(sorted[0]?.exam.date || '2000-03-01', -60);
   for (const r of sorted) {
     const need = r.needDays || examPrepDays(r.subject);
     const days = [];

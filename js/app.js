@@ -3,7 +3,7 @@ import {
   skHolidays, timeToMin, todayISO,
 } from './dates.js';
 import { describeWhen, parseWhen, teachingWeeks, weekByNumber, weekOf, weekStatus, holidayName } from './weeks.js';
-import { CLASS_TYPES, ITEM_KINDS, examPrepDays, planExams, resolveItem, rowVerdict } from './planner.js';
+import { CLASS_TYPES, ITEM_KINDS, examPrepDays, planExams, setDefaultPrepDays, resolveItem, rowVerdict } from './planner.js';
 import { buildOutputs } from './outputs.js';
 import { buildICS } from './ics.js';
 import { normalizeName, pageToText, parseListText, parseTimetable } from './timetable-parse.js';
@@ -98,6 +98,7 @@ function setPath(path, value) {
 const main = document.getElementById('main');
 
 function render() {
+  setDefaultPrepDays(state.settings.studyDays);
   document.querySelectorAll('#tabs button').forEach((b) => b.setAttribute('aria-current', b.dataset.tab === ui.tab ? 'page' : 'false'));
   const views = { home: viewHome, timetable: viewTimetable, subjects: viewSubjects, plan: viewPlan, export: viewExport };
   morph(main, (views[ui.tab] || viewHome)());
@@ -565,6 +566,9 @@ function viewPlan() {
   <div class="card">
     <h2>🎯 Odporúčané termíny skúšok</h2>
     ${examHtml}
+    <h3 style="margin-top:14px">📚 Učenie</h3>
+    <div class="grid">${field('Dní učenia na každú skúšku', 'settings.studyDays', { type: 'number', placeholder: 'auto – podľa náročnosti (2–8)', attrs: 'min="0" max="30"' })}</div>
+    <p class="muted">Plán vyberie termíny tak, aby si mal pred každou skúškou toľko dní. Pre jeden predmet to zmeníš v Predmetoch („Dni učenia na skúšku“).</p>
     <h3 style="margin-top:14px">Dni, keď nemôžem mať skúšku</h3>
     <div class="chips">${blockedChips || '<span class="muted">žiadne</span>'}</div>
     <div class="row"><input type="date" id="newBlocked" style="max-width:180px"><button class="btn small" data-action="add-blocked">Pridať</button></div>
@@ -629,6 +633,7 @@ function viewExport() {
     <label class="check"><input type="checkbox" data-bind="settings.ttPrep" ${set.ttPrep !== false ? 'checked' : ''}> „Začni sa pripravovať“ pred testami</label>
     <label class="check"><input type="checkbox" data-bind="settings.registerReminder" ${set.registerReminder !== false ? 'checked' : ''}> Pripomenúť prihlásenie na skúšku</label>
     <label class="check"><input type="checkbox" data-bind="settings.ttStudy" ${set.ttStudy ? 'checked' : ''}> Dni učenia pred skúškami</label>
+    ${set.ttStudy ? `<div class="grid" style="margin:4px 0 8px 26px;max-width:320px">${field('Koľko dní sa učiť na skúšku', 'settings.studyDays', { type: 'number', placeholder: 'auto (podľa náročnosti)', attrs: 'min="0" max="30"' })}</div>` : ''}
     <div class="grid" style="margin:8px 0">
       ${field('Štítok pre všetky úlohy', 'settings.ttTag', { placeholder: 'napr. Škola', value: set.ttTag ?? 'Škola' })}
       <label class="f"><span>Formát dátumu</span><select data-bind="settings.ttDateFmt">${[
