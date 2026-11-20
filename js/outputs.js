@@ -40,6 +40,7 @@ export function buildOutputs(state, planRows) {
   }
 
   // Tests, assignments, …
+  const testGroups = {};
   for (const s of subjects) {
     for (const it of s.items || []) {
       const r = resolveItem(it, s, classes, sem);
@@ -63,6 +64,25 @@ export function buildOutputs(state, planRows) {
         key: `item:${it.id}`, kind: 'item', title, content: note,
         date: r.date, time: r.allDay ? null : r.start, priority: 5,
       });
+      // Study days before credit tests ("zápočtovka"), like before exams.
+      const testDays = Number(settings.testStudyDays) || 0;
+      if (testDays > 0 && (it.kind === 'test' || it.kind === 'zapocet')) {
+        // Two tests of one subject on the same day share their study days.
+        const group = `${s.id}:${r.date}`;
+        const names = (testGroups[group] = testGroups[group] || []);
+        names.push(it.title || kind.label);
+        if (names.length > 1) continue;
+        for (let k = testDays; k >= 1; k--) {
+          const d = addDays(r.date, -k);
+          if (diffDays(today, d) < 0) continue;
+          tasks.push({
+            key: `tstudy:${it.id}:${d}`, kind: 'study', group, step: k,
+            title: '', content: `${kind.label} je ${fmtDate(r.date)}${r.start ? ' o ' + r.start : ''}.`, date: d, time: null, priority: 1,
+            subjectLabel: s.short || s.name,
+          });
+        }
+        continue;
+      }
       const prep = it.prepDays === '' || it.prepDays == null ? kind.prep : Number(it.prepDays);
       if (prep > 0) {
         const pd = addDays(r.date, -prep);
@@ -120,6 +140,13 @@ export function buildOutputs(state, planRows) {
     }
   }
 
+  // Name the shared study days now that every test of the day is known.
+  for (const t of tasks) {
+    if (!t.group) continue;
+    const testDays = Number(settings.testStudyDays) || 0;
+    const label = `${testGroups[t.group].join(' + ')} – ${t.subjectLabel}`;
+    t.title = t.step === 1 ? `📚 Opakovanie: ${label}` : `📚 Učenie: ${label} (${testDays - t.step + 1}/${testDays - 1})`;
+  }
   events.sort((a, b) => a.date.localeCompare(b.date) || (a.start || '').localeCompare(b.start || ''));
   tasks.sort((a, b) => a.date.localeCompare(b.date) || (a.time || '').localeCompare(b.time || ''));
   return { events, tasks };

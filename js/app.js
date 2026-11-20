@@ -567,7 +567,8 @@ function viewPlan() {
     <h2>🎯 Odporúčané termíny skúšok</h2>
     ${examHtml}
     <h3 style="margin-top:14px">📚 Učenie</h3>
-    <div class="grid">${field('Dní učenia na každú skúšku', 'settings.studyDays', { type: 'number', placeholder: 'auto – podľa náročnosti (2–8)', attrs: 'min="0" max="30"' })}</div>
+    <div class="grid">${field('Dní učenia na každú skúšku', 'settings.studyDays', { type: 'number', placeholder: 'auto – podľa náročnosti (2–8)', attrs: 'min="0" max="30"' })}
+      ${field('Dní učenia na zápočtový test', 'settings.testStudyDays', { type: 'number', placeholder: 'žiadne (len pripomienka)', attrs: 'min="0" max="21"' })}</div>
     <p class="muted">Plán vyberie termíny tak, aby si mal pred každou skúškou toľko dní. Pre jeden predmet to zmeníš v Predmetoch („Dni učenia na skúšku“).</p>
     <h3 style="margin-top:14px">Dni, keď nemôžem mať skúšku</h3>
     <div class="chips">${blockedChips || '<span class="muted">žiadne</span>'}</div>
@@ -633,7 +634,8 @@ function viewExport() {
     <label class="check"><input type="checkbox" data-bind="settings.ttPrep" ${set.ttPrep !== false ? 'checked' : ''}> „Začni sa pripravovať“ pred testami</label>
     <label class="check"><input type="checkbox" data-bind="settings.registerReminder" ${set.registerReminder !== false ? 'checked' : ''}> Pripomenúť prihlásenie na skúšku</label>
     <label class="check"><input type="checkbox" data-bind="settings.ttStudy" ${set.ttStudy ? 'checked' : ''}> Dni učenia pred skúškami</label>
-    ${set.ttStudy ? `<div class="grid" style="margin:4px 0 8px 26px;max-width:320px">${field('Koľko dní sa učiť na skúšku', 'settings.studyDays', { type: 'number', placeholder: 'auto (podľa náročnosti)', attrs: 'min="0" max="30"' })}</div>` : ''}
+    ${set.ttStudy ? `<div class="grid" style="margin:4px 0 8px 26px;max-width:560px">${field('Koľko dní sa učiť na skúšku', 'settings.studyDays', { type: 'number', placeholder: 'auto (podľa náročnosti)', attrs: 'min="0" max="30"' })}
+      ${field('Koľko dní na zápočtový test', 'settings.testStudyDays', { type: 'number', placeholder: 'žiadne', attrs: 'min="0" max="21"' })}</div>` : ''}
     <div class="grid" style="margin:8px 0">
       ${field('Štítok pre všetky úlohy', 'settings.ttTag', { placeholder: 'napr. Škola', value: set.ttTag ?? 'Škola' })}
       <label class="f"><span>Formát dátumu</span><select data-bind="settings.ttDateFmt">${[
