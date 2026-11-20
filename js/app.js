@@ -7,7 +7,9 @@ import { CLASS_TYPES, ITEM_KINDS, examPrepDays, planExams, resolveItem, rowVerdi
 import { buildOutputs } from './outputs.js';
 import { buildICS } from './ics.js';
 import { normalizeName, pageToText, parseListText, parseTimetable } from './timetable-parse.js';
-import { matchSubject, parseAcademicCalendar, parseCourseDoc, pickSemester, subjectHints } from './doc-parse.js';
+import {
+  looksLikeExamList, matchSubject, narrowTerms, parseAcademicCalendar, parseCourseDoc, parseExamList, pickSemester, subjectHints,
+} from './doc-parse.js';
 import { extractPdf } from './pdf-extract.js';
 import * as G from './google.js';
 import * as TT from './ticktick.js';
@@ -210,6 +212,15 @@ function importReport() {
       <div>${esc(e.text)}</div></div></div>`;
     if (e.kind === 'timetable') return `<div class="found"><span class="fi">📅</span><div><b>Rozvrh</b> · <span class="muted">${esc(e.file)}</span>
       <div>${esc(e.text)}</div></div></div>`;
+    if (e.kind === 'exams') {
+      const subj = byId[e.subjectId];
+      if (!subj) return '';
+      const list = subj.exams.filter((x) => e.examIds.includes(x.id))
+        .map((x) => `<li>${x.retakeOnly ? '🔁' : '🎓'} ${fmtDay(x.date)} ${esc(x.time || '')}${x.retakeOnly ? ' <span class="muted">(opravný)</span>' : ''}${x.note ? ` <span class="muted">· ${esc(x.note)}</span>` : ''}</li>`).join('');
+      return `<div class="found"><span class="fi">🎓</span><div><b>${esc(subj.name)}</b> – termíny skúšky
+        ${e.examiner ? `<div class="muted">Nechal som termíny skúšajúcej/-ceho ${esc(e.examiner)} (učí ťa podľa rozvrhu).</div>` : ''}
+        <ul>${list}</ul></div></div>`;
+    }
     if (e.kind === 'course') {
       const subj = byId[e.subjectId];
       if (!subj) return '';
@@ -217,9 +228,10 @@ function importReport() {
         const r = resolveItem(it, subj, state.classes, state.semester);
         const k = ITEM_KINDS[it.kind] || ITEM_KINDS.ine;
         const when = r.ok ? `${fmtDay(r.date)}${r.allDay ? '' : ' ' + r.start}${r.via === 'class' ? ' <span class="muted">(tvoja hodina)</span>' : ''}` : `<span class="warn">${esc(r.reason)}</span>`;
-        return `<li>${k.icon} ${esc(it.title)} – <b>${when}</b> <span class="muted">· ${esc(it.when)}. týždeň${it.note ? ', ' + esc(it.note) : ''}</span></li>`;
+        return `<li>${k.icon} ${esc(it.title)} – <b>${when}</b> <span class="muted">· ${/^\d+(-\d+)?$/.test(it.when) ? esc(it.when) + '. týždeň' : esc(it.when)}${it.note ? ', ' + esc(it.note) : ''}</span> ${retakeControls(subj, it)}</li>`;
       }).join('');
-      const exams = e.examCount ? `<li>🎓 ${e.examCount} termínov skúšky</li>` : '';
+      const exams = (subj.exams || []).filter((x) => (e.examIds || []).includes(x.id))
+        .map((x) => `<li>${x.retakeOnly ? '🔁 Opravný termín' : '🎓 Skúška'} – <b>${fmtDay(x.date)}${x.time ? ' ' + esc(x.time) : ''}</b></li>`).join('');
       return `<div class="found"><span class="fi">📘</span><div>
         <div class="row"><select data-import-move="${ei}" aria-label="Predmet" style="max-width:340px;font-weight:600">${state.subjects.map((x) => `<option value="${x.id}" ${x.id === subj.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
         <span class="muted">${esc(e.file)}</span></div>
@@ -441,7 +453,7 @@ function viewSubjects() {
         <input class="when" data-bind="subjects.${si}.items.${ii}.when" value="${esc(it.when)}" placeholder="Kedy: 12 / 12-13 / 10.12.">
         <input data-bind="subjects.${si}.items.${ii}.time" value="${esc(it.time || '')}" placeholder="čas (voliteľný)">
         <button class="icon" data-action="del-item" data-si="${si}" data-ii="${ii}" title="Odstrániť">🗑️</button>
-        <div class="res">${res}</div>
+        <div class="res">${res} ${retakeControls(s, it)}</div>
       </div>`;
     }).join('');
     const exams = (s.exams || []).map((e, ei) => `<div class="exam">
@@ -649,7 +661,7 @@ async function getPdfjs() {
   return pdfjsPromise;
 }
 
-const KIND_ORDER = { calendar: 0, timetable: 1, course: 2, unknown: 3 };
+const KIND_ORDER = { calendar: 0, timetable: 1, course: 2, exams: 3, unknown: 4 };
 
 async function readSource(src) {
   if (src.text != null) return { name: src.name, text: src.text, pages: null, subjectId: src.subjectId };
@@ -663,6 +675,7 @@ async function readSource(src) {
 function sniff(doc) {
   const cal = parseAcademicCalendar(doc.text);
   if (cal) return { kind: 'calendar', cal };
+  if (looksLikeExamList(doc.text)) return { kind: 'exams' };
   const tt = doc.pages ? parseTimetable(doc.pages) : parseListText(doc.text);
   const course = parseCourseDoc(doc.text.split('\n'));
   const nSubj = new Set(tt.classes.map((c) => normalizeName(c.subject))).size;
@@ -700,6 +713,7 @@ async function importFiles(sources) {
       const names = [...new Set(d.tt.classes.map((c) => c.subject))];
       report.entries.push({ kind: 'timetable', file: d.name, text: `${d.tt.classes.length} hodín z ${names.length} predmetov: ${names.join(', ')}` });
     } else if (d.kind === 'course') report.entries.push(applyCourse(d));
+    else if (d.kind === 'exams') report.entries.push(...applyExamList(d));
     else {
       report.entries.push({
         kind: 'unknown', file: d.name,
@@ -748,19 +762,189 @@ function applyCourse(d) {
   for (const it of d.course.items) {
     // Re-importing the same document updates instead of duplicating.
     const same = subj.items.find((x) => x.kind === it.kind && normalizeName(x.title) === normalizeName(it.title));
-    if (same) { Object.assign(same, { when: it.when, note: it.note || '' }); itemIds.push(same.id); continue; }
-    const item = { id: uid(), kind: it.kind, title: it.title, when: it.when, time: '', note: it.note || '', auto: true };
+    const retakes = retakeOptions(it.retakes);
+    if (same) { Object.assign(same, { when: it.when, note: it.note || '', retakes }); itemIds.push(same.id); continue; }
+    const item = { id: uid(), kind: it.kind, title: it.title, when: it.when, time: '', note: it.note || '', retakes, auto: true };
     subj.items.push(item);
     itemIds.push(item.id);
   }
-  let examCount = 0;
-  for (const e of d.course.exams) {
-    if (subj.exams.some((x) => x.date === e.date)) continue;
-    subj.exams.push({ id: uid(), date: e.date, time: e.time || '09:00', note: '' });
-    examCount++;
+  const examIds = d.course.exams.map((e) => addExam(subj, e));
+  // "…predmetu Operačné systémy…" for "Operačné systémy a kyberbezpečnosť" → OS
+  if (subj.shortAuto !== false) {
+    const key = normalizeName(subj.name);
+    const shorter = subjectHints(d.text).filter((h) => h.length < subj.name.length && key.startsWith(normalizeName(h)) && normalizeName(h).length >= 6);
+    if (shorter.length) subj.short = initials(shorter[0]);
   }
-  subj.exams.sort((a, b) => a.date.localeCompare(b.date));
-  return { kind: 'course', file: d.name, subjectId: subj.id, itemIds, examCount };
+  return { kind: 'course', file: d.name, subjectId: subj.id, itemIds, examIds };
+}
+
+/** Retake chances as values for the "Kedy" field. */
+function retakeOptions(list) {
+  if (!list || !list.length) return undefined;
+  const out = [];
+  for (const r of list) {
+    if (!r.examPeriod) { out.push({ when: String(r.week), label: `${r.week}. týždeň` }); continue; }
+    if (!isISO(state.semester.examStart)) continue;
+    const mon = addDays(mondayOf(state.semester.examStart), 7 * (r.week - 1));
+    out.push({ when: fmtDate(mon), label: `${r.week}. týždeň skúškového (od ${fmtDate(mon)})` });
+  }
+  return out.length ? out : undefined;
+}
+
+function retakeOf(subj, it) {
+  return subj.items.find((x) => x.retakeOf === it.id);
+}
+
+/** "Idem na opravu" next to a test; on a retake: switch between its possible weeks. */
+function retakeControls(subj, it) {
+  if (it.kind !== 'test') return '';
+  if (it.retakeOf) {
+    const opts = it.retakes || [];
+    if (opts.length < 2) return '';
+    return `<span class="chips" style="display:inline-flex;margin:0">${opts.map((o) => `<button class="btn small ${o.when === it.when ? 'primary' : 'ghost'}"
+      data-action="retake-when" data-sid="${subj.id}" data-iid="${it.id}" data-when="${esc(o.when)}">${esc(o.label)}</button>`).join('')}</span>`;
+  }
+  const r = retakeOf(subj, it);
+  return r
+    ? `<button class="btn small primary" data-action="retake" data-sid="${subj.id}" data-iid="${it.id}" title="Zrušiť opravu">🔁 Ideš na opravu ✕</button>`
+    : `<button class="btn small" data-action="retake" data-sid="${subj.id}" data-iid="${it.id}">🔁 Idem na opravu</button>`;
+}
+
+/** Adds (or removes) the retake of a test. Picks the first retake chance that is still ahead. */
+function toggleRetake(subj, it, { when, options, force } = {}) {
+  const existing = retakeOf(subj, it);
+  if (existing && !force) { subj.items = subj.items.filter((x) => x !== existing); return null; }
+  const opts = options || it.retakes || [];
+  const today = todayISO();
+  const ahead = opts.find((o) => {
+    const r = resolveItem({ ...it, when: o.when, retakeOf: it.id }, subj, state.classes, state.semester);
+    return r.ok && (r.endDate || r.date) >= today;
+  });
+  const pick = when || (ahead || opts[opts.length - 1] || {}).when || '';
+  if (existing) { existing.when = pick; existing.retakes = opts.length ? opts : existing.retakes; return existing; }
+  const item = {
+    id: uid(), kind: 'test', title: `Oprava: ${it.title}`, when: pick, time: '', note: '',
+    retakeOf: it.id, retakes: opts.length ? opts : undefined, auto: true,
+  };
+  subj.items.splice(subj.items.indexOf(it) + 1, 0, item);
+  return item;
+}
+
+/* ---- "#do=…" links: a prepared set of changes the student opens in their own app ---- */
+
+function findSubject(hint) {
+  if (!hint) return null;
+  const h = fold(hint).replace(/[^a-z0-9]+/g, ' ').trim();
+  return state.subjects.find((x) => fold(x.short || '') === h) ||
+    state.subjects.find((x) => fold(x.name).replace(/[^a-z0-9]+/g, ' ').includes(h)) ||
+    state.subjects.find((x) => h.includes(fold(x.name).replace(/[^a-z0-9]+/g, ' '))) || null;
+}
+
+function findItem(subj, hint) {
+  const h = normalizeName(hint);
+  return subj.items.find((x) => !x.retakeOf && normalizeName(x.title) === h) ||
+    subj.items.find((x) => !x.retakeOf && (normalizeName(x.title).includes(h) || h.includes(normalizeName(x.title))));
+}
+
+async function runLinkActions(actions) {
+  const snapshot = JSON.stringify(state);
+  const texts = actions.filter((a) => a.t === 'text');
+  if (texts.length) {
+    await importFiles(texts.map((a) => ({ name: a.name || 'z odkazu', text: a.text, subjectId: findSubject(a.subject)?.id })));
+  }
+  const report = ui.imported || { entries: [], notes: [], snapshot };
+  report.snapshot = snapshot;
+  const touched = new Map();
+  const mark = (subj, item) => { if (!touched.has(subj)) touched.set(subj, []); touched.get(subj).push(item.id); };
+  for (const a of actions) {
+    if (a.t === 'text') continue;
+    const subj = findSubject(a.subject);
+    if (!subj) { report.notes.push(`Nenašiel som predmet „${a.subject}“ – najprv nahraj rozvrh.`); continue; }
+    if (a.t === 'item') {
+      const same = findItem(subj, a.title);
+      if (same) { same.when = a.when; mark(subj, same); continue; }
+      const it = { id: uid(), kind: a.kind || 'test', title: a.title, when: a.when, time: a.time || '', note: a.note || '', auto: true };
+      subj.items.push(it);
+      mark(subj, it);
+    } else if (a.t === 'retake') {
+      let orig = findItem(subj, a.of);
+      if (!orig) {
+        orig = { id: uid(), kind: 'test', title: a.of, when: a.ofWhen || '', time: '', note: '', auto: true };
+        subj.items.push(orig);
+      }
+      const opts = (a.options || []).map((w) => ({ when: String(w), label: /^\d+$/.test(String(w)) ? `${w}. týždeň` : String(w) }));
+      const known = orig.retakes && orig.retakes.length ? orig.retakes : null;
+      const r = toggleRetake(subj, orig, { when: a.when, options: known || (opts.length ? opts : undefined), force: true });
+      mark(subj, orig);
+      mark(subj, r);
+    }
+  }
+  for (const [subj, ids] of touched) report.entries.push({ kind: 'course', file: 'odkaz', subjectId: subj.id, itemIds: ids, examIds: [] });
+  ui.imported = report;
+  ui.tab = 'home';
+  save();
+}
+
+function readLinkActions() {
+  const m = location.hash.match(/(?:^#|&)do=([^&]+)/);
+  if (!m) return null;
+  history.replaceState(null, '', location.pathname + location.search);
+  try {
+    const b64 = decodeURIComponent(m[1]).replace(/-/g, '+').replace(/_/g, '/');
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const data = JSON.parse(new TextDecoder().decode(bytes));
+    return Array.isArray(data) ? data : null;
+  } catch (e) {
+    console.error(e);
+    return null;
+  }
+}
+
+/** Add or update one exam term; returns its id. */
+function addExam(subj, e) {
+  const same = subj.exams.find((x) => x.date === e.date && (!x.time || !e.time || x.time === e.time || (x.timeAuto && e.time)));
+  if (same) {
+    if (e.time) { same.time = e.time; same.timeAuto = false; }
+    if (e.retakeOnly != null) same.retakeOnly = Boolean(e.retakeOnly);
+    if (e.note && !same.note) same.note = e.note;
+    return same.id;
+  }
+  const x = { id: uid(), date: e.date, time: e.time || '09:00', timeAuto: !e.time, note: e.note || '', retakeOnly: Boolean(e.retakeOnly) };
+  subj.exams.push(x);
+  subj.exams.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  return x.id;
+}
+
+/** Terms copied from the student system (MAIS): several subjects at once. */
+function applyExamList(d) {
+  const terms = parseExamList(d.text, state.subjects);
+  const groups = new Map();
+  for (const t of terms) {
+    let subj = t.subjectId && state.subjects.find((x) => x.id === t.subjectId);
+    if (!subj) {
+      subj = state.subjects.find((x) => normalizeName(x.name) === normalizeName(t.subjectName));
+      if (!subj) { subj = newSubject(t.subjectName); state.subjects.push(subj); }
+    }
+    if (!groups.has(subj)) groups.set(subj, []);
+    groups.get(subj).push(t);
+    // "Skúška z OOP", "DM- skúšajúci …", "ÚŠaAvBS - skúška": the system's own abbreviation.
+    if (subj.shortAuto !== false) {
+      const ab = (t.title.match(/(?:^|\s|z\s)([A-ZÁ-Ž][A-Za-zÁ-ž]{1,7})(?=\s*[-–]|\s*$)/) || [])[1];
+      if (ab && /[A-ZÁ-Ž].*[A-ZÁ-Ž]/.test(ab) && fold(initials(subj.name, true)).startsWith(fold(ab[0]))) subj.short = ab;
+    }
+  }
+  const out = [];
+  for (const [subj, list] of groups) {
+    const teachers = state.classes.filter((c) => c.subjectId === subj.id).map((c) => c.teacher || '').join(' ');
+    const { terms: kept, examiner } = narrowTerms(list, teachers);
+    const examIds = kept.map((t) => addExam(subj, {
+      date: t.date, time: t.time, retakeOnly: t.retakeOnly,
+      note: [t.room, t.regUntil ? `prihlásiť do ${fmtDate(t.regUntil)}` : ''].filter(Boolean).join(' · '),
+    }));
+    out.push({ kind: 'exams', file: d.name, subjectId: subj.id, examIds: [...new Set(examIds)], examiner });
+  }
+  if (!out.length) out.push({ kind: 'unknown', file: d.name, text: 'Nenašiel som termíny skúšok.' });
+  return out;
 }
 
 /** Typical Slovak semester when no faculty calendar was given. */
@@ -801,11 +985,17 @@ function applyParsed(parsed, { ask = true } = {}) {
   }
 }
 
+function initials(name, all = false) {
+  return name.split(/\s+/).filter((w) => all || w.length > 2 || /^\d+$/.test(w)).map((w) => (/^\d+$/.test(w) ? w : w[0].toUpperCase())).join('');
+}
+
+function fold(t) {
+  return String(t).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
 function newSubject(name) {
-  const short = name.length > 14
-    ? name.split(/\s+/).filter((w) => w.length > 2 || /^\d+$/.test(w)).map((w) => (/^\d+$/.test(w) ? w : w[0].toUpperCase())).join('')
-    : '';
-  return { id: uid(), name, short, credits: 5, difficulty: 3, prepDays: '', wantRetake: true, items: [], exams: [] };
+  const short = name.length > 14 ? initials(name) : '';
+  return { id: uid(), name, short, shortAuto: true, credits: 5, difficulty: 3, prepDays: '', wantRetake: true, items: [], exams: [] };
 }
 
 /* --------------------------------- events --------------------------------- */
@@ -830,6 +1020,7 @@ document.addEventListener('change', (e) => {
   if (el.dataset.type === 'number') v = v === '' ? '' : Number(v);
   if (path.endsWith('.time') && v && el.type !== 'time') v = parseTime(v) || v;
   setPath(path, v);
+  if (/^subjects\.\d+\.short$/.test(path)) getPath(path.replace(/\.short$/, '')).shortAuto = false;
   if (path === 'semester.start' && isISO(v) && !state.semester.examStart) {
     const wk = teachingWeeks(state.semester);
     if (wk.length) state.semester.examStart = addDays(wk[wk.length - 1].monday, 7);
@@ -951,6 +1142,24 @@ document.addEventListener('click', async (e) => {
         if (!text.trim()) return toast('Najprv vlož text');
         const subjectId = document.getElementById('anyTextSubj').value || undefined;
         return await importFiles([{ name: 'vložený text', text, subjectId }]);
+      }
+      case 'retake': {
+        const subj = state.subjects.find((x) => x.id === b.dataset.sid);
+        const it = subj?.items.find((x) => x.id === b.dataset.iid);
+        if (!it) return;
+        const r = toggleRetake(subj, it);
+        if (r) {
+          const res = resolveItem(r, subj, state.classes, state.semester);
+          toast(res.ok ? `🔁 Oprava: ${fmtDay(res.date)}${res.allDay ? '' : ' ' + res.start}` : '🔁 Oprava pridaná – doplň, kedy je', 3500);
+          if (ui.imported) ui.imported.entries.forEach((e) => { if (e.subjectId === subj.id && e.itemIds?.includes(it.id)) e.itemIds.push(r.id); });
+        }
+        return save();
+      }
+      case 'retake-when': {
+        const subj = state.subjects.find((x) => x.id === b.dataset.sid);
+        const it = subj?.items.find((x) => x.id === b.dataset.iid);
+        if (it) it.when = b.dataset.when;
+        return save();
       }
       case 'undo-import': {
         if (!ui.imported) return;
@@ -1128,6 +1337,12 @@ if (tt) {
   setTimeout(() => toast(tt.ok ? '✅ TickTick pripojený' : `TickTick: ${tt.error}`, 4000), 300);
 }
 render();
+
+const linkActions = readLinkActions();
+if (linkActions) {
+  runLinkActions(linkActions).then(() => toast('✅ Zmeny z odkazu sú pridané – skontroluj ich', 4000))
+    .catch((e) => { console.error(e); toast(`Odkaz sa nepodarilo použiť: ${e.message}`, 5000); });
+}
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});

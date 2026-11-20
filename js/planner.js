@@ -110,6 +110,9 @@ export function planExams(subjects, sem, options = {}) {
       continue;
     }
     let options2 = terms.slice().sort((a, b) => a.date.localeCompare(b.date) || (a.time || '').localeCompare(b.time || ''));
+    // Retake-only terms ("1. opravný termín") count as a safety net, not as a first attempt.
+    const regular = options2.filter((e) => !e.retakeOnly);
+    if (regular.length) options2 = regular;
     if (s.lockedExamId) {
       const locked = options2.find((e) => e.id === s.lockedExamId);
       if (locked) options2 = [locked];

@@ -113,9 +113,13 @@ function dateSpec(seg) {
   return `${+m[1]}.${+m[2]}.${m[3] || ''}`;
 }
 
+const WORD_ORD = { prv: 1, druh: 2, tret: 3, stvrt: 4, piat: 5 };
+
 function ordinal(f) {
-  const r = f.match(/\b(i{1,3}|iv|v)\b\.?/);
+  const r = f.match(/(?:test|zapoctovka|pisomka|previerka|praca)\s*(i{1,3}|iv)\b/);
   if (r && ROMAN[r[1]]) return ROMAN[r[1]];
+  const w = f.match(/(?:^|[\s•*-])(prv|druh|tret|stvrt|piat)[aiyeu]\S*\s+(?:\S+\s+)?(?:zapoct|test|pisom|previer|kontrol)/);
+  if (w) return WORD_ORD[w[1]];
   const a = f.match(/(?:^|\s)(\d)\.\s*(?:zapoct|test|pisom|previer|kontrol)|(?:test|zapoctovka|pisomka|previerka)\s*(?:c\.)?\s*(\d)\b/);
   return a ? Number(a[1] || a[2]) : 0;
 }
@@ -155,12 +159,21 @@ export function parseCourseDoc(lines) {
     const when = spec.from === spec.to ? String(spec.from) : `${spec.from}-${spec.to}`;
     const key = itemKey(kind, f, title);
     const prev = found.get(key);
-    if (!prev) { found.set(key, { kind, title, when, source, from: spec.from, to: spec.to }); return; }
+    if (!prev) { found.set(key, { kind, title, when, source, from: spec.from, to: spec.to, ord: kind === 'test' ? ordinal(f) : 0 }); return; }
     // A schedule table names one exact week inside an earlier "6. or 7. week".
     if (prev.from !== prev.to && spec.from === spec.to && spec.from >= prev.from && spec.from <= prev.to) {
       prev.note = `podľa podmienok ${prev.when.replace('-', '. alebo ')}. týždeň`;
       prev.when = when; prev.from = spec.from; prev.to = spec.to;
     }
+  };
+  // Retake chances: "oprava Zápočtovka I." (week 11), "1. opravná písomka 13. týždeň",
+  // "2. opravná písomka 1. týždeň skúškového obdobia".
+  const retakes = [];
+  const noteRetake = (seg, spec) => {
+    const f = fold(seg);
+    if (!/oprav|nahradn/.test(f) || !/zapoctov|test|pisom|previer|kontroln/.test(f)) return;
+    const m = f.match(/oprav\S*\s+(?:zapoctov\S*\s+)?(?:test|zapoctovk\S*|pisomk\S*|previerk\S*)\s+(?:c\.\s*)?(i{1,3}|iv|\d)\b(?!\s*\.?\s*tyz)/);
+    retakes.push({ ord: m ? (ROMAN[m[1]] || Number(m[1])) : 0, week: spec.from, examPeriod: /skuskov/.test(f) });
   };
   const classify = (seg) => {
     const f = fold(seg);
@@ -174,6 +187,7 @@ export function parseCourseDoc(lines) {
     for (const seg of line.split(/;|,(?![^(]*\))/)) {
       const spec = weekSpec(seg);
       if (!spec || spec.from < 1 || spec.to > 16) continue;
+      noteRetake(seg, spec);
       const kind = classify(seg);
       if (kind) add(kind, seg, spec, 'text');
     }
@@ -192,26 +206,38 @@ export function parseCourseDoc(lines) {
       const endLine = k + 1 < best.length ? best[k + 1].i : Math.min(lines.length, s.i + 3);
       const block = lines.slice(s.i, endLine).join('\n').replace(/^\s*\d{1,2}\s*\.\s*/, '');
       for (const seg of block.split(/[,;•●▪\n]|\s[–-]\s/)) {
+        noteRetake(seg, { from: +s.n, to: +s.n });
         const kind = classify(seg);
         if (!kind || seg.trim().length < 4) continue;
-        if (kind === 'zadanie' && !(/ukoncen|deadline|termin/.test(fold(seg)) || /[A-Z][A-Z0-9_-]{2,}/.test(seg))) continue;
+        if (kind === 'zadanie' && !(/ukoncen|deadline|termin/.test(fold(seg)) || /\b[A-Z][A-Z0-9_-]{2,}\b/.test(seg))) continue;
         add(kind, seg, { from: +s.n, to: +s.n, text: '' }, 'table');
       }
     });
   }
 
   // 3) Exam dates: "Skúška: 12.1.2027 9:00 …" lines.
+  // Also "Riadny hromadný termín – 12. 01. 2027" under a "Podmienky skúšky" heading.
   const exams = [];
+  const docTalksExam = lines.some((l) => /skusk|exam/.test(fold(l)));
   for (const line of lines) {
     const f = fold(line);
-    if (!/skusk|exam/.test(f) || /opravn/.test(f) && !/termin/.test(f)) continue;
+    const examLine = /skusk|exam/.test(f) || (docTalksExam && /termin/.test(f) && /riadn|opravn|hromadn|nahradn/.test(f));
+    if (!examLine || /zapoct|pisomk/.test(f) || (/opravn/.test(f) && !/termin/.test(f))) continue;
     for (const m of line.matchAll(/(\d{1,2})\.\s?(\d{1,2})\.\s?(\d{4})(?:\s*(?:o|,)?\s*(\d{1,2})[:.](\d{2}))?/g)) {
       const d = iso(m[1], m[2], m[3]);
-      if (isISO(d)) exams.push({ date: d, time: m[4] ? `${m[4].padStart(2, '0')}:${m[5]}` : '' });
+      if (isISO(d)) exams.push({ date: d, time: m[4] ? `${m[4].padStart(2, '0')}:${m[5]}` : '', retakeOnly: /opravn|nahradn/.test(f) });
     }
   }
 
   const items = [...found.values()].sort((a, b) => a.from - b.from);
+  const seenR = new Set();
+  const uniq = retakes.filter((r) => { const k = `${r.ord}|${r.week}|${r.examPeriod}`; return seenR.has(k) ? false : (seenR.add(k), true); });
+  for (const it of items) {
+    if (it.kind !== 'test') continue;
+    const mine = uniq.filter((r) => (r.ord === 0 || r.ord === it.ord) && (r.examPeriod || r.week > it.to))
+      .sort((a, b) => Number(a.examPeriod) - Number(b.examPeriod) || a.week - b.week);
+    if (mine.length) it.retakes = mine.map(({ week, examPeriod }) => ({ week, examPeriod }));
+  }
   return { items, exams: dedupeBy(exams, (e) => e.date + e.time) };
 }
 
@@ -247,4 +273,82 @@ export function matchSubject(subjects, text) {
 function dedupeBy(arr, key) {
   const seen = new Set();
   return arr.filter((x) => (seen.has(key(x)) ? false : (seen.add(key(x)), true)));
+}
+
+/* ------------------------- exam terms list (MAIS) ------------------------- */
+
+const TERM_LINE = /^\s*(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})\s+(\d{1,2})[:.](\d{2})\s*$/;
+
+/** Looks like a list of exam terms copied from the student system. */
+export function looksLikeExamList(text) {
+  const lines = String(text).split(/\r?\n/);
+  const terms = lines.filter((l) => TERM_LINE.test(l)).length;
+  return terms >= 2 && /sk[úu][šs]k|term[íi]n|exam/i.test(text);
+}
+
+/**
+ * Exam terms grouped by subject. Each term: { date, time, room, title,
+ * retakeOnly, examiner, regUntil, full }.
+ * `subjects` are matched by name; unknown names are returned as new.
+ */
+export function parseExamList(text, subjects) {
+  const lines = String(text).split(/\r?\n/).map((l) => l.replace(/ /g, ' '));
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(TERM_LINE);
+    if (!m) continue;
+    const date = iso(m[1], m[2], m[3]);
+    if (!isISO(date)) continue;
+    const time = `${m[4].padStart(2, '0')}:${m[5]}`;
+    let title = '';
+    for (let k = i - 1; k >= 0 && k >= i - 2; k--) {
+      if (lines[k].trim() && !TERM_LINE.test(lines[k])) { title = lines[k].trim(); break; }
+    }
+    // The details row: [registration window] subject  room  capacity  type  note
+    const row = (lines[i + 1] || '').trim();
+    const cols = row.split(/\t+|\s{3,}/).map((c) => c.trim()).filter(Boolean);
+    const reg = row.match(/(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})\s+\d{1,2}:\d{2}\s*[-–]\s*(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})\s+(\d{1,2}:\d{2})/);
+    const subj = matchSubject(subjects, row) || matchSubject(subjects, title);
+    let name = subj ? subj.name : '';
+    if (!name) {
+      name = cols.find((c) => /[a-zá-ž]{3}/i.test(c) && !RANGE.test(c) && !/\d{1,2}\.\s*\d{1,2}\./.test(c)) || title;
+    }
+    const nameIdx = cols.findIndex((c) => fold(c).includes(fold(name).slice(0, 12)));
+    const room = nameIdx >= 0 && cols[nameIdx + 1] && !/^\d+\/\d+$/.test(cols[nameIdx + 1]) ? cols[nameIdx + 1] : '';
+    const ex = `${title} ${row}`.match(/sk[úu][šs]aj[úu]c[ia]\S*\s+([A-ZÁ-Ž][a-zá-ž]+)/);
+    out.push({
+      subjectId: subj?.id || null,
+      subjectName: name,
+      date, time, room, title,
+      retakeOnly: /opravn|n[áa]hradn/i.test(title),
+      examiner: ex ? ex[1] : '',
+      regUntil: reg ? iso(reg[4], reg[5], reg[6]) : '',
+      full: /obsaden/i.test(row),
+    });
+  }
+  return out;
+}
+
+/**
+ * Keep only terms that make sense for this student: if terms are split by
+ * examiner and one of them teaches the student's classes, keep that one.
+ * Same date + time in several rooms becomes one term.
+ */
+export function narrowTerms(terms, teacherText) {
+  const t = fold(teacherText || '');
+  const examiners = [...new Set(terms.map((x) => x.examiner).filter(Boolean))];
+  let kept = terms;
+  let mine = null;
+  if (examiners.length > 1) {
+    mine = examiners.find((e) => t.includes(fold(e))) || null;
+    if (mine) kept = terms.filter((x) => !x.examiner || x.examiner === mine);
+  }
+  const merged = new Map();
+  for (const x of kept) {
+    const k = `${x.date} ${x.time}`;
+    const prev = merged.get(k);
+    if (!prev) merged.set(k, { ...x });
+    else if (x.room && !prev.room.split(' / ').includes(x.room)) prev.room = `${prev.room} / ${x.room}`;
+  }
+  return { terms: [...merged.values()].sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)), examiner: mine };
 }
