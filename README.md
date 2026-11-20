@@ -15,6 +15,19 @@ ako sú v sylabe („12. týždeň“), a termíny skúšok. Rozvrhár:
 
 Všetko beží v prehliadači – PDF sa nikam neposiela, žiadny vlastný server (okrem malej proxy pre TickTick).
 
+## Ako na to
+
+Na úvodnej obrazovke pretiahni naraz všetko, čo máš:
+
+| Čo nahráš | Čo z toho Rozvrhár zistí |
+|---|---|
+| **Časový harmonogram fakulty** | začiatok a koniec výučby, počet týždňov, skúškové obdobie, dni voľna |
+| **Rozvrh (napr. z MAIS-u)** | predmety, hodiny, typ (P / CL / CN / S), miestnosti, vyučujúcich |
+| **Podmienky zápočtu, sylabus** | testy, odovzdania zadaní, zápočet („6. týždeň“) a termíny skúšok – priradí ich správnemu predmetu |
+
+„Zápočtový test I. v 6. týždni“ sa tak sám zmení na *Ut 27.10. 09:10 – tvoje cvičenie z OS*.
+Ak niečo nesedí, dá sa to opraviť v záložkách Predmety a Rozvrh, alebo celý import vrátiť jedným klikom.
+
 ## Spustenie lokálne
 
 ```bash
@@ -94,6 +107,7 @@ js/weeks.js, dates.js  týždne semestra, sviatky, dátumy
 js/planner.js          umiestnenie testov, výber termínov skúšok, plán učenia
 js/outputs.js, ics.js  udalosti a úlohy, export .ics
 js/timetable-parse.js  rozpoznanie rozvrhu z PDF / textu
+js/doc-parse.js        harmonogram fakulty, podmienky zápočtu / sylaby
 js/google.js           prihlásenie, Drive sync, Google Kalendár
 js/ticktick.js         TickTick API
 worker/                Cloudflare Worker pre TickTick OAuth

@@ -49,7 +49,8 @@ const TYPE_WORDS = [
 const TYPE_TOKENS = {
   p: 'P', pr: 'P', '(p)': 'P', '[p]': 'P', pred: 'P',
   c: 'C', cv: 'C', 'cv.': 'C', '(c)': 'C', '[c]': 'C', cvi: 'C', 'c.': 'C',
-  l: 'L', lab: 'L', '(l)': 'L', '[l]': 'L',
+  l: 'L', lab: 'L', '(l)': 'L', '[l]': 'L', cl: 'L', lc: 'L',
+  cn: 'C', cp: 'C', cs: 'C', ci: 'C',
   s: 'S', sem: 'S', '(s)': 'S', '[s]': 'S',
 };
 const TEACHER_RE = /\b(Ing|Mgr|doc|prof|RNDr|PhDr|PaedDr|MUDr|JUDr|Dr|Bc)\.|PhD\.?|CSc\.?|ArtD\.?/;
@@ -59,19 +60,30 @@ const PARITY_EVEN = /(?:^|\s|\()(p[aá]rn[ýye]\s+t[ýy]ž\S*|p[aá]rn[ýye]|eve
 const WEEKS_RE = /(\d{1,2}(?:\s*[-–]\s*\d{1,2})?(?:\s*,\s*\d{1,2}(?:\s*[-–]\s*\d{1,2})?)*)\s*\.?\s*(?:t[ýy]ž\w*|t\.|tyz\w*|week)/i;
 
 function isRoomToken(tok) {
-  const t = tok.replace(/[(),]/g, '');
+  const t = tok.replace(/,/g, '').replace(/\([^)]*\)$/, '').replace(/[()]/g, '');
   if (/^aula/i.test(t)) return true;
+  if (/\.$/.test(t) && /^\d+\.$/.test(t)) return false;
   const digits = (t.match(/\d/g) || []).length;
-  if (t.length > 10 || !/^[A-Za-zÁ-ž]{0,4}[- ]?\d[\dA-Za-z./-]*$/.test(t)) return false;
-  return digits >= 2 || /[-.]/.test(t);
+  if (t.length > 10 || !/^[A-Za-zÁ-ž]{0,4}\d*[-_ ]?[A-Za-z]?\d[\dA-Za-z./_-]*$/.test(t)) return false;
+  return digits >= 2 || /[-._]/.test(t);
 }
 
-export function classify(lines) {
+// Study-group lists like "A1, A2, A3" or "01. sk, 02. sk, 05." are not names.
+function isGroupLine(l) {
+  const toks = l.split(/[\s,]+/).filter(Boolean);
+  return toks.length > 0 && toks.every((t) => /^(\d{1,2}\.?|sk\.?|[A-Z]{1,2}\d{1,2}|skupina|sk\.?\d+)$/i.test(t)) &&
+    !/^\d{1,2}\.?$/.test(l.trim());
+}
+
+export function classify(lines, wraps) {
   const res = { subject: '', type: '?', room: '', teacher: '', parity: 'all', weeks: '', start: null, end: null };
   const rest = [];
-  for (let raw of lines) {
-    let l = String(raw).replace(/\s+/g, ' ').trim();
+  const restWrap = [];
+  let inTeacher = false;
+  for (let li = 0; li < lines.length; li++) {
+    let l = String(lines[li]).replace(/\s+/g, ' ').trim();
     if (!l) continue;
+    if (isGroupLine(l)) { res.groups = (res.groups ? res.groups + ', ' : '') + l.replace(/,\s*$/, ''); continue; }
     const r = l.match(RANGE_RE);
     if (r) {
       res.start = minToTime(Number(r[1]) * 60 + Number(r[2]));
@@ -86,19 +98,24 @@ export function classify(lines) {
       if (re.test(l)) { if (res.type === '?') res.type = t; l = l.replace(re, ' ').replace(/\s+/g, ' ').trim(); }
     }
     if (!l) continue;
+    const tok1 = TYPE_TOKENS[l.toLowerCase()];
+    if (tok1) { if (res.type === '?') res.type = tok1; inTeacher = false; continue; }
+    if (inTeacher && !isRoomToken(l)) { res.teacher = `${res.teacher} ${l}`.replace(/\s+/g, ' ').trim(); continue; }
     const tm = l.match(TEACHER_START);
     if (tm) {
       // Teacher names run to the end of the line; keep whatever precedes them.
       if (!res.teacher) res.teacher = l.slice(tm.index).trim();
+      inTeacher = Boolean(wraps);
       l = l.slice(0, tm.index).trim();
       if (!l) continue;
-    } else if (TEACHER_RE.test(l)) { if (!res.teacher) res.teacher = l; continue; }
+    } else if (TEACHER_RE.test(l)) { if (!res.teacher) { res.teacher = l; inTeacher = Boolean(wraps); } continue; }
     const aula = l.match(/(?:^|\s)(aula(?:\s+\S+)?)$/i);
     if (aula && aula.index > 0 && !res.room) {
       res.room = aula[1];
       l = l.slice(0, aula.index).trim();
     }
     rest.push(l);
+    restWrap.push(Boolean(wraps && wraps[li]));
   }
   // Peel type / room tokens off the ends of each remaining line.
   const cleaned = [];
@@ -117,18 +134,21 @@ export function classify(lines) {
       if (t) { if (res.type === '?') res.type = t; return; }
       if (idx > 0 && isRoomToken(line) && !res.room) { res.room = line; return; }
     }
-    cleaned.push(line);
+    cleaned.push({ line, wrap: restWrap[idx] });
   });
   function setRoom(tok) {
     if (res.room) return false;
     res.room = tok.replace(/[(),]/g, '');
     return true;
   }
-  res.subject = cleaned[0] || '';
-  if (!res.room && cleaned.length > 1 && isRoomToken(cleaned[cleaned.length - 1])) {
-    res.room = cleaned.pop();
-  }
-  if (cleaned.length > 1) res.extra = cleaned.slice(1).join(' · ');
+  // A long name wraps onto the next line(s) of the cell.
+  const parts = cleaned.map((c) => c.line);
+  let n = 1;
+  while (n < cleaned.length && cleaned[n].wrap) n++;
+  res.subject = parts.slice(0, n).join(' ').replace(/- /g, '-').trim();
+  const others = parts.slice(n);
+  if (!res.room && others.length && isRoomToken(others[others.length - 1])) res.room = others.pop();
+  if (others.length) res.extra = others.join(' · ');
   return res;
 }
 
@@ -200,7 +220,17 @@ export function parseGrid(page) {
   }
   // Column extents: from enclosing header cells if we have them, else midpoints.
   const spacing = median(columns.slice(1).map((c, i) => c.cx - columns[i].cx)) || 40;
+  // Header text left-aligned in its cell (box edges line up with the text start)?
+  const cellXs = rects.filter((q) => q.filled && q.y0 > headerBottom - 1 && q.x0 >= labelRight - 2).map((q) => q.x0);
+  const leftAligned = cellXs.length >= 2 &&
+    cellXs.filter((x) => columns.some((c) => Math.abs(Math.min(...c.items.map((i) => i.x0)) - x) < 3)).length >= cellXs.length * 0.6;
   columns.forEach((c, i) => {
+    if (leftAligned) {
+      c.left = Math.min(...c.items.map((it) => it.x0)) - 1.5;
+      c.right = i < columns.length - 1 ? Math.min(...columns[i + 1].items.map((it) => it.x0)) - 1.5 : c.left + spacing;
+      if (c.end == null || c.end <= c.start) c.end = i < columns.length - 1 ? columns[i + 1].start : c.start + 60;
+      return;
+    }
     const r = rects.length ? smallestRect(rects, c.cx, cy(c.items[0]), (q) => q.x1 - q.x0 < spacing * 2.5) : null;
     if (r) { c.left = r.x0; c.right = r.x1; }
     else {
@@ -211,7 +241,12 @@ export function parseGrid(page) {
   });
   const colMinutes = median(columns.map((c) => c.end - c.start));
 
-  // Day bands.
+  // Day bands. Day labels sit either in the middle or at the top of their row;
+  // class boxes starting level with a label tell us it is the latter.
+  const lhA = median(anchors.map((a) => a.y1 - a.y0)) || 8;
+  const cellRects = rects.filter((q) => q.filled && q.x0 >= labelRight - 2 && q.y0 > headerBottom - 1);
+  const topAligned = cellRects.length >= 2 &&
+    cellRects.filter((q) => anchors.some((a) => Math.abs(q.y0 - a.y0) < lhA * 0.8)).length >= cellRects.length * 0.6;
   const bands = [];
   anchors.forEach((a, i) => {
     const day = dayIndex(a.s);
@@ -219,7 +254,10 @@ export function parseGrid(page) {
     let top;
     let bottom;
     if (r && r.y1 - r.y0 > (a.y1 - a.y0) * 1.2) { top = r.y0; bottom = r.y1; }
-    else {
+    else if (topAligned) {
+      top = a.y0 - lhA * 0.6;
+      bottom = i === anchors.length - 1 ? Math.max(a.y1 + lhA, ...cellRects.map((q) => q.y1)) : anchors[i + 1].y0 - lhA * 0.6;
+    } else {
       top = i === 0 ? headerBottom : (cy(anchors[i - 1]) + cy(a)) / 2;
       bottom = i === anchors.length - 1 ? cy(a) + (cy(a) - top) : (cy(a) + cy(anchors[i + 1])) / 2;
     }
@@ -273,13 +311,32 @@ export function parseGrid(page) {
     };
     const band = bandOf(cy(box));
     if (!band) continue;
-    const lines = toLines(its);
-    const info = classify(lines);
+    const geo = toLineBoxes(its);
+    const lines = geo.map((g) => g.text);
+    const cellRight = g.rect ? g.rect.x1 : Math.max(...its.map((i) => i.x1));
+    const wraps = geo.map((ln, k) => {
+      if (!k) return false;
+      const prev = geo[k - 1];
+      if (/(?:^|\s)(a|v|vo|s|so|z|zo|k|ku|na|pre|do|o|pri|and|of|in|for|the|-)$/i.test(prev.text)) return true;
+      const word = ln.text.split(' ')[0];
+      const wordW = (ln.x1 - ln.x0) * (word.length / Math.max(1, ln.text.length));
+      const charW = (ln.x1 - ln.x0) / Math.max(1, ln.text.length);
+      return prev.x1 + charW + wordW > cellRight - 1;
+    });
+    const info = classify(lines, wraps);
     if (!info.subject) continue;
     let start;
     let end;
     if (info.start && info.end) { start = timeToMin(info.start); end = timeToMin(info.end); }
-    else if (g.rect) { start = snap(xToMin(box.x0 + 0.5)); end = snap(xToMin(box.x1 - 0.5)); }
+    else if (g.rect) {
+      // Box edges line up with column edges: take the nearest ones.
+      const near = (x, side) => columns.reduce((b, c) => (Math.abs(c[side] - x) < Math.abs(b[side] - x) ? c : b), columns[0]);
+      const cL = near(box.x0, 'left');
+      const cR = near(box.x1, 'right');
+      if (Math.abs(cL.left - box.x0) < spacing * 0.3 && Math.abs(cR.right - box.x1) < spacing * 0.3 && cR.end > cL.start) {
+        start = cL.start; end = cR.end;
+      } else { start = snap(xToMin(box.x0 + 0.5)); end = snap(xToMin(box.x1 - 0.5)); }
+    }
     else {
       const c0 = colAt(box.x0 + 1) || columns[0];
       const c1 = colAt(box.x1 - 1) || c0;
@@ -348,6 +405,23 @@ function clusterLoose(items, spacing) {
   return [...map.values()];
 }
 
+function toLineBoxes(items) {
+  const lh = median(items.map((i) => i.y1 - i.y0)) || 8;
+  const lines = [];
+  for (const it of items.slice().sort((a, b) => cy(a) - cy(b))) {
+    const line = lines.find((l) => Math.abs(l.y - cy(it)) < lh * 0.5);
+    if (line) line.items.push(it);
+    else lines.push({ y: cy(it), items: [it] });
+  }
+  return lines.sort((a, b) => a.y - b.y).map((l) => {
+    const its = l.items.sort((a, b) => a.x0 - b.x0);
+    return {
+      text: joinItems(its),
+      x0: Math.min(...its.map((i) => i.x0)), x1: Math.max(...its.map((i) => i.x1)),
+    };
+  });
+}
+
 function toLines(items) {
   const lh = median(items.map((i) => i.y1 - i.y0)) || 8;
   const lines = [];
@@ -356,8 +430,24 @@ function toLines(items) {
     if (line) line.items.push(it);
     else lines.push({ y: cy(it), items: [it] });
   }
-  return lines.sort((a, b) => a.y - b.y)
-    .map((l) => l.items.sort((a, b) => a.x0 - b.x0).map((i) => i.s.trim()).join(' ').replace(/\s+/g, ' ').trim());
+  return lines.sort((a, b) => a.y - b.y).map((l) => joinItems(l.items.sort((a, b) => a.x0 - b.x0)));
+}
+
+// Glue text runs back together: a space only where there is a visible gap.
+function joinItems(its) {
+  let out = '';
+  let prev = null;
+  for (const it of its) {
+    const t = it.s;
+    if (prev) {
+      const h = Math.max(1, Math.min(prev.y1 - prev.y0, it.y1 - it.y0));
+      const gap = it.x0 - prev.x1;
+      if ((gap > h * 0.18 || /\s$/.test(prev.s) || /^\s/.test(t)) && !/\s$/.test(out)) out += ' ';
+    }
+    out += t;
+    prev = it;
+  }
+  return out.replace(/\s+/g, ' ').trim();
 }
 
 /* ------------------------------ list layout ------------------------------ */
@@ -404,7 +494,7 @@ export function parseTimetable(pages) {
     if (!pick && grid && grid.error) notes.push(grid.error);
     if (pick) { all.push(...pick.classes); layout = layout || pick.layout; }
   }
-  return { classes: dedupe(all), layout, notes };
+  return { classes: dedupe(canonicalNames(all)), layout, notes };
 }
 
 function pageLines(page) {
@@ -427,6 +517,17 @@ function pageLines(page) {
     }
     return out;
   }).join('\n');
+}
+
+// "Bezpečnostný manažment prineste si notebook" → name + note, when the plain
+// name appears in another cell.
+function canonicalNames(classes) {
+  const names = [...new Set(classes.map((c) => c.subject))].sort((a, b) => a.length - b.length);
+  return classes.map((c) => {
+    const base = names.find((n) => n !== c.subject && c.subject.startsWith(n + ' '));
+    if (!base) return c;
+    return { ...c, subject: base, extra: [c.subject.slice(base.length).trim(), c.extra].filter(Boolean).join(' · ') };
+  });
 }
 
 function dedupe(classes) {

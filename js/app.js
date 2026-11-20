@@ -6,7 +6,8 @@ import { describeWhen, parseWhen, teachingWeeks, weekByNumber, weekOf, weekStatu
 import { CLASS_TYPES, ITEM_KINDS, examPrepDays, planExams, resolveItem, rowVerdict } from './planner.js';
 import { buildOutputs } from './outputs.js';
 import { buildICS } from './ics.js';
-import { normalizeName, parseListText, parseTimetable } from './timetable-parse.js';
+import { normalizeName, pageToText, parseListText, parseTimetable } from './timetable-parse.js';
+import { matchSubject, parseAcademicCalendar, parseCourseDoc, pickSemester, subjectHints } from './doc-parse.js';
 import { extractPdf } from './pdf-extract.js';
 import * as G from './google.js';
 import * as TT from './ticktick.js';
@@ -47,7 +48,8 @@ function merge(base, data) {
 }
 
 let state = load();
-const ui = { tab: localStorage.getItem('rozvrhar:tab') || 'semester', variant: 0, weekQuery: '', busy: null, user: null };
+const ui = { tab: localStorage.getItem('rozvrhar:tab') || 'home', variant: 0, weekQuery: '', busy: null, user: null, imported: null };
+if (ui.tab === 'semester') ui.tab = 'home';
 let driveTimer = null;
 
 function save({ rerender = true } = {}) {
@@ -95,8 +97,8 @@ const main = document.getElementById('main');
 
 function render() {
   document.querySelectorAll('#tabs button').forEach((b) => b.setAttribute('aria-current', b.dataset.tab === ui.tab ? 'page' : 'false'));
-  const views = { semester: viewSemester, timetable: viewTimetable, subjects: viewSubjects, plan: viewPlan, export: viewExport };
-  morph(main, (views[ui.tab] || viewSemester)());
+  const views = { home: viewHome, timetable: viewTimetable, subjects: viewSubjects, plan: viewPlan, export: viewExport };
+  morph(main, (views[ui.tab] || viewHome)());
   renderHeader();
 }
 
@@ -172,6 +174,84 @@ function field(label, path, { type = 'text', placeholder = '', attrs = '', value
 
 /* -------------------------------- Semester -------------------------------- */
 
+function viewHome() {
+  const empty = !state.classes.length && !state.subjects.length;
+  return `
+  <div class="card hero">
+    <h2>${empty ? 'Hoď sem svoje PDF 👇' : 'Pridať ďalšie PDF'}</h2>
+    ${empty ? `<p class="muted">Rozvrh z MAIS-u, harmonogram fakulty, podmienky zápočtu, sylaby… aj viac naraz.
+      Rozvrhár sám zistí, čo je čo, a „6. týždeň“ prepočíta na tvoj deň a hodinu.</p>` : ''}
+    <label class="dropzone" id="drop">
+      <input type="file" id="anyInput" accept="application/pdf,.pdf,.txt,text/plain" multiple>
+      <div class="big">📥</div>
+      <div><b>Klikni alebo sem pretiahni súbory</b></div>
+      <small>Spracuje sa priamo v prehliadači – nikam sa neposiela.</small>
+    </label>
+    ${ui.busy === 'import' ? `<p>⏳ ${esc(ui.busyText || 'Čítam…')}</p>` : ''}
+    <details>
+      <summary>Alebo vlož text (napr. skopírovaný zo stránky predmetu)</summary>
+      <textarea id="anyText" placeholder="Zápočtový test I. – 6. týždeň&#10;Odovzdanie projektu – 12. týždeň"></textarea>
+      <label class="f" style="margin-top:6px"><span>Predmet (ak to nie je rozvrh)</span>
+        <select id="anyTextSubj"><option value="">zistiť automaticky</option>${state.subjects.map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></label>
+      <div class="row end" style="margin-top:8px"><button class="btn" data-action="import-text">Spracovať</button></div>
+    </details>
+  </div>
+  ${importReport()}
+  ${upcoming()}
+  ${viewSemester()}`;
+}
+
+function importReport() {
+  const rep = ui.imported;
+  if (!rep) return '';
+  const byId = Object.fromEntries(state.subjects.map((x) => [x.id, x]));
+  const rows = rep.entries.map((e, ei) => {
+    if (e.kind === 'calendar') return `<div class="found"><span class="fi">📆</span><div><b>Harmonogram fakulty</b> · <span class="muted">${esc(e.file)}</span>
+      <div>${esc(e.text)}</div></div></div>`;
+    if (e.kind === 'timetable') return `<div class="found"><span class="fi">📅</span><div><b>Rozvrh</b> · <span class="muted">${esc(e.file)}</span>
+      <div>${esc(e.text)}</div></div></div>`;
+    if (e.kind === 'course') {
+      const subj = byId[e.subjectId];
+      if (!subj) return '';
+      const items = (subj.items || []).filter((it) => e.itemIds.includes(it.id)).map((it) => {
+        const r = resolveItem(it, subj, state.classes, state.semester);
+        const k = ITEM_KINDS[it.kind] || ITEM_KINDS.ine;
+        const when = r.ok ? `${fmtDay(r.date)}${r.allDay ? '' : ' ' + r.start}${r.via === 'class' ? ' <span class="muted">(tvoja hodina)</span>' : ''}` : `<span class="warn">${esc(r.reason)}</span>`;
+        return `<li>${k.icon} ${esc(it.title)} – <b>${when}</b> <span class="muted">· ${esc(it.when)}. týždeň${it.note ? ', ' + esc(it.note) : ''}</span></li>`;
+      }).join('');
+      const exams = e.examCount ? `<li>🎓 ${e.examCount} termínov skúšky</li>` : '';
+      return `<div class="found"><span class="fi">📘</span><div>
+        <div class="row"><select data-import-move="${ei}" aria-label="Predmet" style="max-width:340px;font-weight:600">${state.subjects.map((x) => `<option value="${x.id}" ${x.id === subj.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+        <span class="muted">${esc(e.file)}</span></div>
+        <ul>${items}${exams}</ul></div></div>`;
+    }
+    return `<div class="found"><span class="fi">❓</span><div><b>${esc(e.file)}</b><div class="warn">${esc(e.text)}</div></div></div>`;
+  }).join('');
+  return `<div class="card">
+    <h2>✨ Čo som našiel <button class="btn small ghost" data-action="undo-import">↶ Vrátiť</button></h2>
+    ${rows}
+    ${rep.notes.map((n) => `<p class="warn">${esc(n)}</p>`).join('')}
+    <div class="row" style="margin-top:10px">
+      <button class="btn primary" data-goto="plan">🎯 Pozrieť plán</button>
+      <button class="btn" data-goto="export">📤 Poslať do kalendára</button>
+    </div>
+  </div>`;
+}
+
+function upcoming() {
+  if (!state.semester.start) return '';
+  const { events } = buildOutputs(state, currentPlanRows());
+  const today = todayISO();
+  const next = events.filter((e) => (e.category === 'item' || e.category === 'exam') && (e.endDate || e.date) >= today)
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.start || '').localeCompare(b.start || '')).slice(0, 6);
+  if (!next.length) return '';
+  return `<div class="card agenda"><h2>⏭️ Najbližšie</h2>${next.map((e) => {
+    const d = diffDays(today, e.date);
+    const rel = d <= 0 ? 'dnes' : d === 1 ? 'zajtra' : `o ${d} dní`;
+    return `<div class="ev"><span class="d">${fmtDay(e.date)}${e.allDay ? '' : `<br>${e.start}`}</span><span>${esc(e.title)} <small class="muted">· ${rel}</small></span></div>`;
+  }).join('')}</div>`;
+}
+
 function viewSemester() {
   const s = state.semester;
   const weeks = teachingWeeks(s);
@@ -199,17 +279,15 @@ function viewSemester() {
   const skipChips = (s.skipWeeks || []).map((d, i) => `<span class="chip">týždeň od ${fmtDate(d)}
     <button data-action="del-skip" data-i="${i}" aria-label="Odstrániť">✕</button></span>`).join('');
 
+  const summary = s.start && weeks.length
+    ? `<b>${esc(s.name || 'Semester')}</b> · výučba ${fmtDate(weeks[0].monday)} – ${fmtDate(addDays(weeks[weeks.length - 1].monday, 4))} (${weeks.length} týž.)${s.examStart ? ` · skúškové od ${fmtDate(s.examStart)}` : ''}${curWeek ? ` · <b>teraz ${curWeek}. týždeň</b>` : ''}`
+    : 'Semester ešte nie je nastavený – nahraj harmonogram fakulty alebo ho zadaj ručne.';
   return `
-  ${!s.start ? `<div class="card"><h2>Ahoj 👋</h2>
-    <ol class="steps">
-      <li>Nastav <b>začiatok semestra</b> – od neho sa počítajú týždne.</li>
-      <li>V záložke <b>Rozvrh</b> nahraj PDF rozvrhu (alebo ho vlož ako text).</li>
-      <li>V <b>Predmetoch</b> zadaj testy a zadania tak, ako sú v sylabe („12. týždeň“), a termíny skúšok.</li>
-      <li><b>Plán</b> ti ukáže dátumy a odporučí, na ktoré termíny skúšok sa prihlásiť.</li>
-      <li><b>Export</b> pošle všetko do Google Kalendára a TickTicku.</li>
-    </ol></div>` : ''}
   <div class="card">
-    <h2>Semester</h2>
+    <h2>🗓️ Semester</h2>
+    <p>${summary}${s.guessed ? ' <span class="warn">(odhad – nahraj harmonogram fakulty, nech je to presne)</span>' : ''}</p>
+    <details ${s.start ? '' : 'open'}>
+    <summary>Upraviť</summary>
     <div class="grid">
       ${field('Názov', 'semester.name', { placeholder: 'ZS 2026/27' })}
       ${field('Začiatok (1. týždeň)', 'semester.start', { type: 'date' })}
@@ -217,10 +295,11 @@ function viewSemester() {
       ${field('Skúškové od', 'semester.examStart', { type: 'date' })}
       ${field('Skúškové do', 'semester.examEnd', { type: 'date' })}
     </div>
+    </details>
   </div>
 
   <div class="card">
-    <h2>Kalkulačka týždňov</h2>
+    <h2>🔢 Kalkulačka týždňov</h2>
     <p class="muted">Napíš „12“, „12-13“ alebo dátum a hneď uvidíš, kedy to je.</p>
     <input id="weekQuery" value="${esc(ui.weekQuery)}" placeholder="napr. 12 alebo 10.12." autocomplete="off">
     <p id="weekAnswer">${answer}</p>
@@ -234,7 +313,7 @@ function viewSemester() {
   </div>
 
   <div class="card">
-    <h2>Voľné dni a prerušenia</h2>
+    <details><summary style="margin:0">Voľné dni a prerušenia</summary>
     <p class="muted">V sviatok sa hodiny do kalendára nedajú. Týždeň prerušenia (napr. dekanské voľno) sa do číslovania nepočíta.</p>
     <h3>Sviatky / voľné dni</h3>
     <div class="chips">${holChips || '<span class="muted">žiadne</span>'}</div>
@@ -249,6 +328,7 @@ function viewSemester() {
       <input type="date" id="newSkip" style="max-width:180px">
       <button class="btn small" data-action="add-skip">Pridať týždeň</button>
     </div>
+    </details>
   </div>`;
 }
 
@@ -274,12 +354,12 @@ function viewTimetable() {
   <div class="card">
     <h2>Nahraj rozvrh</h2>
     <label class="dropzone" id="drop">
-      <input type="file" id="pdfInput" accept="application/pdf,.pdf">
+      <input type="file" id="anyInput" accept="application/pdf,.pdf" multiple>
       <div class="big">📄</div>
       <div><b>Klikni alebo sem pretiahni PDF rozvrhu</b></div>
       <small>PDF sa spracuje priamo v prehliadači – nikam sa neposiela.</small>
     </label>
-    ${ui.busy === 'pdf' ? '<p>Čítam PDF…</p>' : ''}
+    ${ui.busy === 'import' ? `<p>⏳ ${esc(ui.busyText || 'Čítam…')}</p>` : ''}
     ${ui.parseNote ? `<p class="${ui.parseNote.ok ? 'ok' : 'warn'}">${esc(ui.parseNote.text)}</p>` : ''}
     <details>
       <summary>Alebo vlož rozvrh ako text</summary>
@@ -569,40 +649,147 @@ async function getPdfjs() {
   return pdfjsPromise;
 }
 
-async function importPdf(file) {
-  ui.busy = 'pdf';
-  ui.parseNote = null;
-  render();
-  try {
-    const pdfjs = await getPdfjs();
-    const pages = await extractPdf(pdfjs, new Uint8Array(await file.arrayBuffer()));
-    const res = parseTimetable(pages);
-    if (!res.classes.length) {
-      const anyText = pages.some((p) => p.items.length);
-      ui.parseNote = {
-        ok: false,
-        text: anyText ? `Z PDF som nevedel vyčítať hodiny${res.notes[0] ? ' (' + res.notes[0] + ')' : ''}. Skús ho vložiť ako text alebo pridaj hodiny ručne.`
-          : 'PDF neobsahuje text (asi je to obrázok/sken). Vlož rozvrh ako text alebo pridaj hodiny ručne.',
-      };
-    } else {
-      applyParsed(res.classes);
-      ui.parseNote = { ok: true, text: `Načítaných ${res.classes.length} hodín z ${new Set(res.classes.map((c) => normalizeName(c.subject))).size} predmetov. Skontroluj ich nižšie.` };
+const KIND_ORDER = { calendar: 0, timetable: 1, course: 2, unknown: 3 };
+
+async function readSource(src) {
+  if (src.text != null) return { name: src.name, text: src.text, pages: null, subjectId: src.subjectId };
+  const isPdf = /pdf$/i.test(src.file.type) || /\.pdf$/i.test(src.file.name);
+  if (!isPdf) return { name: src.file.name, text: await src.file.text(), pages: null };
+  const pdfjs = await getPdfjs();
+  const pages = await extractPdf(pdfjs, new Uint8Array(await src.file.arrayBuffer()));
+  return { name: src.file.name, text: pages.map(pageToText).join('\n'), pages };
+}
+
+function sniff(doc) {
+  const cal = parseAcademicCalendar(doc.text);
+  if (cal) return { kind: 'calendar', cal };
+  const tt = doc.pages ? parseTimetable(doc.pages) : parseListText(doc.text);
+  const course = parseCourseDoc(doc.text.split('\n'));
+  const nSubj = new Set(tt.classes.map((c) => normalizeName(c.subject))).size;
+  if (tt.classes.length >= 3 && nSubj >= 2 && tt.classes.length > course.items.length) return { kind: 'timetable', tt };
+  if (course.items.length || course.exams.length) return { kind: 'course', course };
+  if (tt.classes.length) return { kind: 'timetable', tt };
+  return { kind: 'unknown' };
+}
+
+/** One entry point for every file: timetable, faculty calendar, course docs. */
+async function importFiles(sources) {
+  if (!sources.length) return;
+  const snapshot = JSON.stringify(state);
+  ui.busy = 'import';
+  const report = { entries: [], notes: [], snapshot };
+  const docs = [];
+  for (const [i, src] of sources.entries()) {
+    const name = src.name || src.file.name;
+    ui.busyText = `Čítam ${name} (${i + 1}/${sources.length})…`;
+    render();
+    try {
+      const doc = await readSource(src);
+      docs.push({ ...doc, ...sniff(doc) });
+    } catch (e) {
+      console.error(e);
+      report.entries.push({ kind: 'unknown', file: name, text: `Nepodarilo sa prečítať: ${e.message}` });
     }
-  } catch (e) {
-    console.error(e);
-    ui.parseNote = { ok: false, text: `Chyba pri čítaní PDF: ${e.message}` };
   }
+  // Calendar first (weeks → dates), then the timetable (subjects), then course docs.
+  docs.sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind]);
+  for (const d of docs) {
+    if (d.kind === 'calendar') report.entries.push(applyCalendar(d));
+    else if (d.kind === 'timetable') {
+      applyParsed(d.tt.classes, { ask: false });
+      const names = [...new Set(d.tt.classes.map((c) => c.subject))];
+      report.entries.push({ kind: 'timetable', file: d.name, text: `${d.tt.classes.length} hodín z ${names.length} predmetov: ${names.join(', ')}` });
+    } else if (d.kind === 'course') report.entries.push(applyCourse(d));
+    else {
+      report.entries.push({
+        kind: 'unknown', file: d.name,
+        text: d.text.trim() ? 'Nenašiel som tu rozvrh, termíny ani týždne s testami.' : 'PDF neobsahuje text (asi je to sken/obrázok).',
+      });
+    }
+  }
+  if (!state.semester.start) {
+    Object.assign(state.semester, guessSemester(todayISO()));
+    report.notes.push(`Začiatok semestra som odhadol na ${fmtDate(state.semester.start)}. Ak nesedí, nahraj harmonogram fakulty alebo ho uprav nižšie.`);
+  }
+  ui.imported = report;
   ui.busy = null;
+  ui.tab = 'home';
+  ui.variant = 0;
   save();
 }
 
-function applyParsed(parsed) {
-  const replace = !state.classes.length ||
+function applyCalendar(d) {
+  const sem = pickSemester(d.cal, todayISO());
+  const s = state.semester;
+  Object.assign(s, { name: sem.label, start: sem.start, weeks: sem.weeks, examStart: sem.examStart, examEnd: sem.examEnd, guessed: false });
+  const end = sem.examEnd || addDays(sem.start, 7 * 22);
+  const have = new Set(s.holidays.map((h) => h.date));
+  const add = d.cal.holidays.filter((h) => h.date >= sem.start && h.date <= end && !have.has(h.date));
+  s.holidays.push(...add);
+  s.holidays.sort((a, b) => a.date.localeCompare(b.date));
+  const wk = teachingWeeks(s);
+  return {
+    kind: 'calendar', file: d.name,
+    text: `${sem.label}: výučba ${fmtDate(sem.start)} – ${fmtDate(sem.teachEnd)} (${wk.length} týždňov)` +
+      `${sem.examStart ? `, skúškové ${fmtDate(sem.examStart)} – ${fmtDate(sem.examEnd)}` : ''}` +
+      `${add.length ? `, voľné dni: ${add.map((h) => fmtDate(h.date)).join(', ')}` : ''}`,
+  };
+}
+
+function applyCourse(d) {
+  let subj = d.subjectId ? state.subjects.find((x) => x.id === d.subjectId) : matchSubject(state.subjects, d.text);
+  if (!subj) {
+    const hint = subjectHints(d.text).find((h) => h.length <= 50) || d.name.replace(/\.(pdf|txt)$/i, '');
+    subj = newSubject(hint.trim());
+    subj.fromDoc = true;
+    state.subjects.push(subj);
+  }
+  const itemIds = [];
+  for (const it of d.course.items) {
+    // Re-importing the same document updates instead of duplicating.
+    const same = subj.items.find((x) => x.kind === it.kind && normalizeName(x.title) === normalizeName(it.title));
+    if (same) { Object.assign(same, { when: it.when, note: it.note || '' }); itemIds.push(same.id); continue; }
+    const item = { id: uid(), kind: it.kind, title: it.title, when: it.when, time: '', note: it.note || '', auto: true };
+    subj.items.push(item);
+    itemIds.push(item.id);
+  }
+  let examCount = 0;
+  for (const e of d.course.exams) {
+    if (subj.exams.some((x) => x.date === e.date)) continue;
+    subj.exams.push({ id: uid(), date: e.date, time: e.time || '09:00', note: '' });
+    examCount++;
+  }
+  subj.exams.sort((a, b) => a.date.localeCompare(b.date));
+  return { kind: 'course', file: d.name, subjectId: subj.id, itemIds, examCount };
+}
+
+/** Typical Slovak semester when no faculty calendar was given. */
+function guessSemester(today) {
+  const y = Number(today.slice(0, 4));
+  const m = Number(today.slice(5, 7));
+  const firstMonday = (d) => { let x = d; while (new Date(`${x}T12:00:00Z`).getUTCDay() !== 1) x = addDays(x, 1); return x; };
+  if (m >= 7 || m === 1) {
+    const yy = m === 1 ? y - 1 : y;
+    const examStart = firstMonday(`${yy + 1}-01-02`);
+    return { name: `ZS ${yy}/${String(yy + 1).slice(2)}`, start: firstMonday(`${yy}-09-20`), weeks: 13, examStart, examEnd: addDays(examStart, 39), guessed: true };
+  }
+  const start = firstMonday(`${y}-02-09`);
+  const examStart = addDays(start, 13 * 7);
+  return { name: `LS ${y - 1}/${String(y).slice(2)}`, start, weeks: 13, examStart, examEnd: addDays(examStart, 39), guessed: true };
+}
+
+function applyParsed(parsed, { ask = true } = {}) {
+  const replace = !state.classes.length || !ask ||
     confirm('Nahradiť doterajšie hodiny tými z nového rozvrhu?\n\nOK = nahradiť, Zrušiť = pridať k existujúcim.\n(Predmety, testy a skúšky ostanú.)');
   if (replace) state.classes = [];
   for (const p of parsed) {
     const key = normalizeName(p.subject);
     let s = state.subjects.find((x) => normalizeName(x.name) === key || (x.short && normalizeName(x.short) === key));
+    if (!s) {
+      // A subject first created from a course document under a shorter name.
+      s = state.subjects.find((x) => x.fromDoc && (key.startsWith(normalizeName(x.name)) || normalizeName(x.name).startsWith(key)));
+      if (s) { s.name = p.subject; s.fromDoc = false; }
+    }
     if (!s) {
       s = newSubject(p.subject);
       state.subjects.push(s);
@@ -634,7 +821,8 @@ document.getElementById('tabs').addEventListener('click', (e) => {
 
 document.addEventListener('change', (e) => {
   const el = e.target;
-  if (el.id === 'pdfInput' && el.files[0]) { importPdf(el.files[0]); return; }
+  if (el.id === 'anyInput' && el.files.length) { importFiles([...el.files].map((file) => ({ file }))); el.value = ''; return; }
+  if (el.dataset?.importMove != null) { moveImported(Number(el.dataset.importMove), el.value); return; }
   if (el.id === 'restore' && el.files[0]) { restoreBackup(el.files[0]); return; }
   const path = el.dataset?.bind;
   if (!path) return;
@@ -658,6 +846,14 @@ document.addEventListener('input', (e) => {
 });
 
 document.addEventListener('click', async (e) => {
+  const go = e.target.closest('[data-goto]');
+  if (go) {
+    ui.tab = go.dataset.goto;
+    localStorage.setItem('rozvrhar:tab', ui.tab);
+    render();
+    window.scrollTo({ top: 0 });
+    return;
+  }
   const b = e.target.closest('[data-action]');
   if (!b) return;
   const a = b.dataset.action;
@@ -750,6 +946,19 @@ document.addEventListener('click', async (e) => {
         return save();
       }
       case 'variant': ui.variant = i; return render();
+      case 'import-text': {
+        const text = document.getElementById('anyText').value;
+        if (!text.trim()) return toast('Najprv vlož text');
+        const subjectId = document.getElementById('anyTextSubj').value || undefined;
+        return await importFiles([{ name: 'vložený text', text, subjectId }]);
+      }
+      case 'undo-import': {
+        if (!ui.imported) return;
+        state = merge(defaultState(), JSON.parse(ui.imported.snapshot));
+        ui.imported = null;
+        toast('Vrátené');
+        return save();
+      }
       case 'lock': {
         const subj = state.subjects.find((x) => x.id === b.dataset.sid);
         subj.lockedExamId = subj.lockedExamId === b.dataset.eid ? null : b.dataset.eid;
@@ -800,6 +1009,23 @@ document.addEventListener('click', async (e) => {
     toast(err.message || String(err), 5000);
   }
 });
+
+function moveImported(ei, subjectId) {
+  const e = ui.imported?.entries[ei];
+  if (!e || e.subjectId === subjectId) return;
+  const from = state.subjects.find((x) => x.id === e.subjectId);
+  const to = state.subjects.find((x) => x.id === subjectId);
+  if (!from || !to) return;
+  const moving = from.items.filter((it) => e.itemIds.includes(it.id));
+  from.items = from.items.filter((it) => !e.itemIds.includes(it.id));
+  to.items.push(...moving);
+  // Drop a subject that only existed because of this document.
+  if (from.fromDoc && !from.items.length && !from.exams.length && !state.classes.some((c) => c.subjectId === from.id)) {
+    state.subjects = state.subjects.filter((x) => x !== from);
+  }
+  e.subjectId = to.id;
+  save();
+}
 
 function download(name, text, type) {
   const url = URL.createObjectURL(new Blob([text], { type }));
@@ -890,8 +1116,8 @@ document.addEventListener('drop', (e) => {
   if (!drop) return;
   e.preventDefault();
   drop.classList.remove('over');
-  const f = e.dataTransfer.files[0];
-  if (f) importPdf(f);
+  const files = [...e.dataTransfer.files];
+  if (files.length) importFiles(files.map((file) => ({ file })));
 });
 
 /* ---------------------------------- boot ---------------------------------- */

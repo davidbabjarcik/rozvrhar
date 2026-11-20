@@ -1,9 +1,9 @@
 // Offline support: app shell is cached; pdf.js from the CDN is cached on first use.
-const VERSION = 'rozvrhar-v1';
+const VERSION = 'rozvrhar-v2';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
   'js/app.js', 'js/config.js', 'js/dates.js', 'js/weeks.js', 'js/planner.js', 'js/outputs.js', 'js/ics.js',
-  'js/timetable-parse.js', 'js/pdf-extract.js', 'js/google.js', 'js/ticktick.js',
+  'js/timetable-parse.js', 'js/doc-parse.js', 'js/pdf-extract.js', 'js/google.js', 'js/ticktick.js',
 ];
 
 self.addEventListener('install', (e) => {
