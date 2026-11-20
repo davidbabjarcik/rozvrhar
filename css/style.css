@@ -175,7 +175,7 @@ tr.now td { background: var(--accent-soft); }
 .subject .title input:first-child { flex: 3; }
 .subject .title input:nth-child(2) { flex: 1; }
 .items { margin-top: 10px; }
-.item { display: grid; grid-template-columns: 1fr 1.4fr 1fr .7fr auto; gap: 6px; align-items: center; margin-bottom: 6px; }
+.item { display: grid; grid-template-columns: 1fr 1.4fr 1fr .7fr 1.1fr auto; gap: 6px; align-items: center; margin-bottom: 6px; }
 .item .res { grid-column: 1 / -1; font-size: .8rem; margin-top: -2px; }
 .exam { display: grid; grid-template-columns: 1fr .7fr 1.4fr auto; gap: 6px; align-items: center; margin-bottom: 6px; }
 @media (max-width: 640px) {

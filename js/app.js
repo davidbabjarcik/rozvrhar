@@ -452,6 +452,7 @@ function viewSubjects() {
         <input data-bind="subjects.${si}.items.${ii}.title" value="${esc(it.title)}" placeholder="Názov (napr. 1. test)">
         <input class="when" data-bind="subjects.${si}.items.${ii}.when" value="${esc(it.when)}" placeholder="Kedy: 12 / 12-13 / 10.12.">
         <input data-bind="subjects.${si}.items.${ii}.time" value="${esc(it.time || '')}" placeholder="čas (voliteľný)">
+        <select data-bind="subjects.${si}.items.${ii}.classId" title="Na ktorej hodine">${classOpts(s, it)}</select>
         <button class="icon" data-action="del-item" data-si="${si}" data-ii="${ii}" title="Odstrániť">🗑️</button>
         <div class="res">${res} ${retakeControls(s, it)}</div>
       </div>`;
@@ -789,6 +790,14 @@ function retakeOptions(list) {
     out.push({ when: fmtDate(mon), label: `${r.week}. týždeň skúškového (od ${fmtDate(mon)})` });
   }
   return out.length ? out : undefined;
+}
+
+/** "na ktorej hodine": automatic, or one specific class of the subject. */
+function classOpts(subj, it) {
+  const own = state.classes.filter((c) => c.subjectId === subj.id)
+    .sort((a, b) => a.day - b.day || (a.start || '').localeCompare(b.start || ''));
+  const label = (c) => `${DAY_SHORT[c.day]} ${c.start} ${(CLASS_TYPES[c.type] || '').toLowerCase()}`;
+  return `<option value="">hodina: auto</option>${own.map((c) => `<option value="${c.id}" ${c.id === it.classId ? 'selected' : ''}>${esc(label(c))}</option>`).join('')}`;
 }
 
 function retakeOf(subj, it) {

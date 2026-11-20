@@ -32,7 +32,10 @@ export function resolveItem(item, subject, classes, sem) {
   if (!when) return { ok: false, reason: item.when ? 'Neviem prečítať termín' : 'Chýba termín' };
   const kind = ITEM_KINDS[item.kind] || ITEM_KINDS.ine;
   const ownTime = parseTime(item.time);
-  const subjClasses = classes.filter((c) => c.subjectId === subject.id);
+  const own = classes.filter((c) => c.subjectId === subject.id);
+  // The student picked a specific class ("na piatkovej prednáške").
+  const chosen = item.classId ? own.filter((c) => c.id === item.classId) : [];
+  const subjClasses = chosen.length ? chosen : own;
   const order = item.slot && item.slot !== 'auto' ? [item.slot] : kind.slot;
   const rank = (c) => {
     const i = order.indexOf(c.type);
