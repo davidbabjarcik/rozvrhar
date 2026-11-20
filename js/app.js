@@ -598,7 +598,14 @@ function ticktickLines() {
   };
   return tasks.filter(keep).map((t) => {
     const [, m, d] = t.date.split('-').map(Number);
-    const when = `${EN_MON[m - 1]} ${d}${t.time ? ' ' + t.time : ''}`;
+    const y = t.date.slice(0, 4);
+    const tm = t.time ? ' ' + t.time.replace(/^0/, '') : '';
+    const when = {
+      sk: `${d}.${m}.${y}${tm}`,
+      iso: `${t.date}${t.time ? ' ' + t.time : ''}`,
+      us: `${m}/${d}/${y}${tm}`,
+      en: `${EN_MON[m - 1]} ${d}${t.time ? ' ' + t.time : ''}`,
+    }[set.ttDateFmt || 'sk'];
     const prio = t.priority >= 5 ? ' !high' : '';
     // No other dates in the title, or TickTick may pick the wrong one.
     const title = t.title.replace(/\s*\(\d{1,2}\.\d{1,2}\.\d{4}\)/, '');
@@ -616,7 +623,7 @@ function viewExport() {
     <h2>✅ Do TickTicku</h2>
     <ol class="steps">
       <li>Klikni <b>Kopírovať</b>.</li>
-      <li>V TickTicku otvor zoznam (napr. <i>Škola</i>), klikni do poľa <b>Pridať úlohu</b> a vlož (Ctrl+V).</li>
+      <li>V TickTicku otvor <b>Doručené</b> alebo zoznam (napr. <i>Škola</i>) – <b>nie „Dnes“</b>, tam dostane každá úloha dnešný dátum. Klikni do poľa <b>Pridať úlohu</b> a vlož (Ctrl+V).</li>
       <li>TickTick sa spýta, či pridať viac úloh naraz – potvrď. Dátum a čas si prečíta z textu.</li>
     </ol>
     <label class="check"><input type="checkbox" data-bind="settings.ttPrep" ${set.ttPrep !== false ? 'checked' : ''}> „Začni sa pripravovať“ pred testami</label>
@@ -624,6 +631,9 @@ function viewExport() {
     <label class="check"><input type="checkbox" data-bind="settings.ttStudy" ${set.ttStudy ? 'checked' : ''}> Dni učenia pred skúškami</label>
     <div class="grid" style="margin:8px 0">
       ${field('Štítok pre všetky úlohy', 'settings.ttTag', { placeholder: 'napr. Škola', value: set.ttTag ?? 'Škola' })}
+      <label class="f"><span>Formát dátumu</span><select data-bind="settings.ttDateFmt">${[
+        ['sk', '8.1.2027 8:15'], ['iso', '2027-01-08 08:15'], ['us', '1/8/2027 8:15'], ['en', 'Jan 8 08:15'],
+      ].map(([v, l]) => `<option value="${v}" ${(set.ttDateFmt || 'sk') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
     </div>
     <label class="check"><input type="checkbox" data-bind="settings.ttSubjectTag" ${set.ttSubjectTag !== false ? 'checked' : ''}> Aj štítok predmetu (#OS, #DM…)</label>
     ${lines.length ? `<textarea id="ttText" readonly rows="${Math.min(14, lines.length + 1)}" style="font-family:ui-monospace,Consolas,monospace;font-size:.82rem">${esc(lines.join('\n'))}</textarea>
