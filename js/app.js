@@ -602,7 +602,9 @@ function ticktickLines() {
     const prio = t.priority >= 5 ? ' !high' : '';
     // No other dates in the title, or TickTick may pick the wrong one.
     const title = t.title.replace(/\s*\(\d{1,2}\.\d{1,2}\.\d{4}\)/, '');
-    return `${title} ${when} ${tag(t)}${prio}`.replace(/\s+/g, ' ').trim();
+    const own = String(set.ttTag ?? 'Škola').split(/[,\s]+/).map((x) => x.replace(/^#/, '').replace(/[^\p{L}\p{N}_-]+/gu, '')).filter(Boolean).map((x) => `#${x}`);
+    const tags = [...own, set.ttSubjectTag !== false ? tag(t) : ''].filter(Boolean).join(' ');
+    return `${title} ${when} ${tags}${prio}`.replace(/\s+/g, ' ').trim();
   });
 }
 
@@ -620,6 +622,10 @@ function viewExport() {
     <label class="check"><input type="checkbox" data-bind="settings.ttPrep" ${set.ttPrep !== false ? 'checked' : ''}> „Začni sa pripravovať“ pred testami</label>
     <label class="check"><input type="checkbox" data-bind="settings.registerReminder" ${set.registerReminder !== false ? 'checked' : ''}> Pripomenúť prihlásenie na skúšku</label>
     <label class="check"><input type="checkbox" data-bind="settings.ttStudy" ${set.ttStudy ? 'checked' : ''}> Dni učenia pred skúškami</label>
+    <div class="grid" style="margin:8px 0">
+      ${field('Štítok pre všetky úlohy', 'settings.ttTag', { placeholder: 'napr. Škola', value: set.ttTag ?? 'Škola' })}
+    </div>
+    <label class="check"><input type="checkbox" data-bind="settings.ttSubjectTag" ${set.ttSubjectTag !== false ? 'checked' : ''}> Aj štítok predmetu (#OS, #DM…)</label>
     ${lines.length ? `<textarea id="ttText" readonly rows="${Math.min(14, lines.length + 1)}" style="font-family:ui-monospace,Consolas,monospace;font-size:.82rem">${esc(lines.join('\n'))}</textarea>
       <div class="row" style="margin-top:8px">
         <button class="btn primary" data-action="copy-tasks">📋 Kopírovať (${lines.length} úloh)</button>
