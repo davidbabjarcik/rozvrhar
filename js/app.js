@@ -661,10 +661,10 @@ async function getPdfjs() {
   return pdfjsPromise;
 }
 
-const KIND_ORDER = { calendar: 0, timetable: 1, course: 2, exams: 3, unknown: 4 };
+const KIND_ORDER = { calendar: 0, timetable: 1, exams: 2, course: 3, unknown: 4 };
 
 async function readSource(src) {
-  if (src.text != null) return { name: src.name, text: src.text, pages: null, subjectId: src.subjectId };
+  if (src.text != null) return { name: src.name, text: src.text, pages: null, subjectId: src.subjectId, subjectName: src.subjectName };
   const isPdf = /pdf$/i.test(src.file.type) || /\.pdf$/i.test(src.file.name);
   if (!isPdf) return { name: src.file.name, text: await src.file.text(), pages: null };
   const pdfjs = await getPdfjs();
@@ -751,9 +751,9 @@ function applyCalendar(d) {
 }
 
 function applyCourse(d) {
-  let subj = d.subjectId ? state.subjects.find((x) => x.id === d.subjectId) : matchSubject(state.subjects, d.text);
+  let subj = d.subjectId ? state.subjects.find((x) => x.id === d.subjectId) : ((d.subjectName && findSubject(d.subjectName)) || matchSubject(state.subjects, d.text));
   if (!subj) {
-    const hint = subjectHints(d.text).find((h) => h.length <= 50) || d.name.replace(/\.(pdf|txt)$/i, '');
+    const hint = d.subjectName || subjectHints(d.text).find((h) => h.length <= 50) || d.name.replace(/\.(pdf|txt)$/i, '');
     subj = newSubject(hint.trim());
     subj.fromDoc = true;
     state.subjects.push(subj);
@@ -850,7 +850,7 @@ async function runLinkActions(actions) {
   const snapshot = JSON.stringify(state);
   const texts = actions.filter((a) => a.t === 'text');
   if (texts.length) {
-    await importFiles(texts.map((a) => ({ name: a.name || 'z odkazu', text: a.text, subjectId: findSubject(a.subject)?.id })));
+    await importFiles(texts.map((a) => ({ name: a.name || 'z odkazu', text: a.text, subjectId: findSubject(a.subject)?.id, subjectName: a.subject })));
   }
   const report = ui.imported || { entries: [], notes: [], snapshot };
   report.snapshot = snapshot;
@@ -1338,11 +1338,15 @@ if (tt) {
 }
 render();
 
-const linkActions = readLinkActions();
-if (linkActions) {
-  runLinkActions(linkActions).then(() => toast('✅ Zmeny z odkazu sú pridané – skontroluj ich', 4000))
+function handleLink() {
+  const actions = readLinkActions();
+  if (!actions) return;
+  runLinkActions(actions).then(() => toast('✅ Zmeny z odkazu sú pridané – skontroluj ich', 4000))
     .catch((e) => { console.error(e); toast(`Odkaz sa nepodarilo použiť: ${e.message}`, 5000); });
 }
+handleLink();
+// The app may already be open in this tab when the link is opened.
+window.addEventListener('hashchange', handleLink);
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
