@@ -858,12 +858,16 @@ async function runLinkActions(actions) {
   const mark = (subj, item) => { if (!touched.has(subj)) touched.set(subj, []); touched.get(subj).push(item.id); };
   for (const a of actions) {
     if (a.t === 'text') continue;
-    const subj = findSubject(a.subject);
-    if (!subj) { report.notes.push(`Nenašiel som predmet „${a.subject}“ – najprv nahraj rozvrh.`); continue; }
+    const subj = findSubject(a.subject) || (a.alias && findSubject(a.alias));
+    if (!subj) {
+      if (a.t !== 'short') report.notes.push(`Nenašiel som predmet „${a.subject}“ – najprv nahraj rozvrh.`);
+      continue;
+    }
+    if (a.t === 'short') { subj.short = a.short; subj.shortAuto = false; continue; }
     if (a.t === 'item') {
       const same = findItem(subj, a.title);
-      if (same) { same.when = a.when; mark(subj, same); continue; }
-      const it = { id: uid(), kind: a.kind || 'test', title: a.title, when: a.when, time: a.time || '', note: a.note || '', auto: true };
+      if (same) { Object.assign(same, { when: a.when, ...(a.slot ? { slot: a.slot } : {}) }); mark(subj, same); continue; }
+      const it = { id: uid(), kind: a.kind || 'test', title: a.title, when: a.when, time: a.time || '', note: a.note || '', slot: a.slot, auto: true };
       subj.items.push(it);
       mark(subj, it);
     } else if (a.t === 'retake') {
