@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="sk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Rozvrhár</title>
+  <meta name="description" content="Nahraj rozvrh v PDF, zadaj zápočty a skúšky po týždňoch – Rozvrhár to prepočíta na dátumy, vyberie najlepšie termíny skúšok a pošle všetko do Google Kalendára a TickTicku.">
+  <meta name="theme-color" content="#4f46e5">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="icons/icon.svg" alt="" width="28" height="28">
+      <span>Rozvrhár</span>
+      <span id="weekBadge" class="badge" hidden></span>
+    </div>
+    <div class="account" id="account"></div>
+  </header>
+
+  <nav class="tabs" id="tabs" aria-label="Sekcie">
+    <button data-tab="semester"><span class="ti">🗓️</span><span>Semester</span></button>
+    <button data-tab="timetable"><span class="ti">📄</span><span>Rozvrh</span></button>
+    <button data-tab="subjects"><span class="ti">📚</span><span>Predmety</span></button>
+    <button data-tab="plan"><span class="ti">🎯</span><span>Plán</span></button>
+    <button data-tab="export"><span class="ti">📤</span><span>Export</span></button>
+  </nav>
+
+  <main id="main" tabindex="-1"></main>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

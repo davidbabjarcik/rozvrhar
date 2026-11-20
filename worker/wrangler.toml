@@ -1,0 +1,11 @@
+name = "rozvrhar-ticktick"
+main = "ticktick-proxy.js"
+compatibility_date = "2026-10-01"
+
+[vars]
+# Where the app is hosted (comma separated origins)
+ALLOWED_ORIGINS = "https://YOUR_GITHUB_USERNAME.github.io,http://localhost:8080"
+
+# Secrets – set with:
+#   npx wrangler secret put TICKTICK_CLIENT_ID
+#   npx wrangler secret put TICKTICK_CLIENT_SECRET
