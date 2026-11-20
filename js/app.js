@@ -164,7 +164,7 @@ function renderHeader() {
       <span class="muted hide-sm">${esc(ui.user.email || '')}</span>
       <button class="btn small" data-action="signout">Odhlásiť</button>`);
   } else {
-    morph(acc, `<button class="btn small" data-action="signin">Prihlásiť cez Google</button>`);
+    morph(acc, G.googleConfigured() ? `<button class="btn small" data-action="signin">Prihlásiť cez Google</button>` : '');
   }
 }
 
@@ -245,7 +245,7 @@ function importReport() {
     ${rep.notes.map((n) => `<p class="warn">${esc(n)}</p>`).join('')}
     <div class="row" style="margin-top:10px">
       <button class="btn primary" data-goto="plan">🎯 Pozrieť plán</button>
-      <button class="btn" data-goto="export">📤 Poslať do kalendára</button>
+      <button class="btn" data-goto="export">✅ Do TickTicku</button>
     </div>
   </div>`;
 }
@@ -578,69 +578,66 @@ function viewPlan() {
 
 /* --------------------------------- Export --------------------------------- */
 
-function viewExport() {
-  const rows = currentPlanRows();
-  const { events, tasks } = buildOutputs(state, rows);
-  const nClass = events.filter((e) => e.category === 'class').length;
-  const nOther = events.length - nClass;
-  const gOk = G.googleConfigured();
-  const ttOk = Boolean(TT.proxyUrl());
-  const ttOn = TT.ticktickConnected();
+const EN_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** One line per task, with a date TickTick's smart date parsing understands. */
+function ticktickLines() {
   const set = state.settings;
-  const last = state.sync.lastExport;
+  const { tasks } = buildOutputs(state, currentPlanRows());
+  const today = todayISO();
+  const keep = (t) => {
+    if (diffDays(today, t.date) < 0) return false;
+    if (t.kind === 'study') return Boolean(set.ttStudy);
+    if (t.kind === 'prep') return set.ttPrep !== false;
+    if (t.kind === 'register') return set.registerReminder !== false;
+    return true;
+  };
+  const tag = (t) => {
+    const subj = state.subjects.find((x) => t.title.includes(`– ${x.short || x.name}`) || t.title.includes(x.name));
+    return subj ? `#${(subj.short || subj.name).replace(/[^\p{L}\p{N}_-]+/gu, '')}` : '';
+  };
+  return tasks.filter(keep).map((t) => {
+    const [, m, d] = t.date.split('-').map(Number);
+    const when = `${EN_MON[m - 1]} ${d}${t.time ? ' ' + t.time : ''}`;
+    const prio = t.priority >= 5 ? ' !high' : '';
+    // No other dates in the title, or TickTick may pick the wrong one.
+    const title = t.title.replace(/\s*\(\d{1,2}\.\d{1,2}\.\d{4}\)/, '');
+    return `${title} ${when} ${tag(t)}${prio}`.replace(/\s+/g, ' ').trim();
+  });
+}
+
+function viewExport() {
+  const set = state.settings;
+  const lines = ticktickLines();
   return `
   <div class="card">
-    <h2>📅 Google Kalendár</h2>
-    <p>Vytvorí sa samostatný kalendár <b>„${esc(calName())}“</b> s ${nClass} opakujúcimi sa hodinami a ${nOther} udalosťami (testy, zadania, skúšky).
-      Pri ďalšom exporte sa celý tento kalendár nahradí – tvoje ostatné kalendáre sa nemenia.</p>
-    ${gOk ? '' : '<p class="warn">Najprv doplň Google Client ID v nastaveniach nižšie.</p>'}
-    <label class="check"><input type="checkbox" data-bind="settings.studyInCalendar" ${set.studyInCalendar ? 'checked' : ''}> Dni učenia aj do kalendára</label>
-    <label class="check"><input type="checkbox" data-bind="settings.classReminder" ${set.classReminder ? 'checked' : ''}> Pripomienka 10 min pred každou hodinou</label>
-    <div class="row" style="margin-top:8px">
-      <button class="btn primary" data-action="export-google" ${gOk && events.length && !ui.busy ? '' : 'disabled'}>Exportovať do Google Kalendára</button>
-      <button class="btn" data-action="download-ics" ${events.length ? '' : 'disabled'}>Stiahnuť .ics</button>
-    </div>
-    ${ui.busy === 'google' ? `<div class="progress"><div id="prog" style="width:0%"></div></div>` : ''}
-    ${last?.google ? `<p class="muted">Naposledy: ${new Date(last.google).toLocaleString('sk')}</p>` : ''}
+    <h2>✅ Do TickTicku</h2>
+    <ol class="steps">
+      <li>Klikni <b>Kopírovať</b>.</li>
+      <li>V TickTicku otvor zoznam (napr. <i>Škola</i>), klikni do poľa <b>Pridať úlohu</b> a vlož (Ctrl+V).</li>
+      <li>TickTick sa spýta, či pridať viac úloh naraz – potvrď. Dátum a čas si prečíta z textu.</li>
+    </ol>
+    <label class="check"><input type="checkbox" data-bind="settings.ttPrep" ${set.ttPrep !== false ? 'checked' : ''}> „Začni sa pripravovať“ pred testami</label>
+    <label class="check"><input type="checkbox" data-bind="settings.registerReminder" ${set.registerReminder !== false ? 'checked' : ''}> Pripomenúť prihlásenie na skúšku</label>
+    <label class="check"><input type="checkbox" data-bind="settings.ttStudy" ${set.ttStudy ? 'checked' : ''}> Dni učenia pred skúškami</label>
+    ${lines.length ? `<textarea id="ttText" readonly rows="${Math.min(14, lines.length + 1)}" style="font-family:ui-monospace,Consolas,monospace;font-size:.82rem">${esc(lines.join('\n'))}</textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="btn primary" data-action="copy-tasks">📋 Kopírovať (${lines.length} úloh)</button>
+        <span class="muted">Ak TickTick dátum nerozpozná, vlož najprv jeden riadok na skúšku.</span>
+      </div>` : '<div class="empty">Zatiaľ tu nie je nič na pridanie. Nahraj PDF na úvodnej obrazovke.</div>'}
   </div>
 
   <div class="card">
-    <h2>✅ TickTick</h2>
-    <p>${tasks.length} úloh: testy a zadania, „začni sa pripravovať“, prihlásenie na skúšky, skúšky a dni učenia. Opakovaný export úlohy aktualizuje, neduplikuje.</p>
-    ${ttOk ? '' : '<p class="warn">TickTick potrebuje malý proxy server (návod v README). Bez neho použi .ics alebo skopíruj úlohy.</p>'}
-    <div class="grid">${field('Zoznam v TickTicku', 'settings.listName', { placeholder: 'Škola' })}</div>
-    <div class="row" style="margin-top:8px">
-      ${ttOn ? `<button class="btn primary" data-action="export-tt" ${tasks.length && !ui.busy ? '' : 'disabled'}>Poslať do TickTicku</button>
-        <button class="btn ghost" data-action="tt-disconnect">Odpojiť</button>`
-        : `<button class="btn primary" data-action="tt-connect" ${ttOk ? '' : 'disabled'}>Pripojiť TickTick</button>`}
-      <button class="btn" data-action="copy-tasks" ${tasks.length ? '' : 'disabled'}>Kopírovať ako text</button>
-    </div>
-    ${ui.busy === 'tt' ? `<div class="progress"><div id="prog" style="width:0%"></div></div>` : ''}
-    ${last?.tt ? `<p class="muted">Naposledy: ${new Date(last.tt).toLocaleString('sk')}</p>` : ''}
-  </div>
-
-  <div class="card">
-    <h2>⚙️ Nastavenia</h2>
-    <div class="grid">
-      ${field('Pripomienka pred testom (min)', 'settings.reminderMin', { type: 'number', attrs: 'min="0"' })}
-      ${field('Dĺžka skúšky (min)', 'settings.examMinutes', { type: 'number', attrs: 'min="15"' })}
-    </div>
-    <label class="check"><input type="checkbox" data-bind="settings.registerReminder" ${set.registerReminder !== false ? 'checked' : ''}> Pripomenúť prihlásenie na skúšku (10 dní vopred)</label>
     <details>
-      <summary>Prepojenia (pre vlastné nasadenie)</summary>
-      <div class="grid">
-        <label class="f"><span>Google OAuth Client ID</span><input id="gcid" value="${esc(localStorage.getItem('rozvrhar:gcid') || '')}" placeholder="…apps.googleusercontent.com"></label>
-        <label class="f"><span>TickTick proxy URL</span><input id="ttproxy" value="${esc(localStorage.getItem('rozvrhar:ttProxy') || '')}" placeholder="https://….workers.dev"></label>
-      </div>
-      <div class="row" style="margin-top:8px"><button class="btn small" data-action="save-conn">Uložiť</button></div>
-    </details>
-    <details>
-      <summary>Záloha</summary>
-      <div class="row">
-        <button class="btn small" data-action="backup">Stiahnuť zálohu (.json)</button>
+      <summary style="margin:0">Ďalšie</summary>
+      <div class="row" style="margin-top:10px">
+        <button class="btn small" data-action="download-ics">Stiahnuť kalendár (.ics)</button>
+        <button class="btn small" data-action="copy-state-link">🔗 Kopírovať odkaz s mojimi dátami</button>
+        <button class="btn small" data-action="backup">Záloha (.json)</button>
         <label class="btn small" style="cursor:pointer">Obnoviť zo zálohy<input type="file" id="restore" accept=".json,application/json" hidden></label>
         <button class="btn small ghost bad" data-action="reset">Vymazať všetky dáta</button>
       </div>
+      <p class="muted" style="margin-top:8px">Odkaz s dátami prenesie všetko do iného prehliadača alebo do mobilu – stačí ho tam otvoriť. Nikam sa neposiela, dáta sú priamo v odkaze.</p>
     </details>
   </div>`;
 }
@@ -857,6 +854,16 @@ function findItem(subj, hint) {
 
 async function runLinkActions(actions) {
   const snapshot = JSON.stringify(state);
+  const whole = actions.find((a) => a.t === 'state');
+  if (whole) {
+    const hasData = state.subjects.length || state.classes.length;
+    if (hasData && !confirm('Odkaz obsahuje kompletné dáta Rozvrhára. Nahradiť nimi to, čo máš teraz v tomto prehliadači?')) return;
+    state = merge(defaultState(), whole.data);
+    ui.imported = null;
+    ui.tab = 'home';
+    save();
+    return;
+  }
   const texts = actions.filter((a) => a.t === 'text');
   if (texts.length) {
     await importFiles(texts.map((a) => ({ name: a.name || 'z odkazu', text: a.text, subjectId: findSubject(a.subject)?.id, subjectName: a.subject })));
@@ -888,6 +895,7 @@ async function runLinkActions(actions) {
       const opts = (a.options || []).map((w) => ({ when: String(w), label: /^\d+$/.test(String(w)) ? `${w}. týždeň` : String(w) }));
       const known = orig.retakes && orig.retakes.length ? orig.retakes : null;
       const r = toggleRetake(subj, orig, { when: a.when, options: known || (opts.length ? opts : undefined), force: true });
+      if (a.slot) { r.slot = a.slot; r.classId = ''; }
       mark(subj, orig);
       mark(subj, r);
     }
@@ -898,19 +906,36 @@ async function runLinkActions(actions) {
   save();
 }
 
-function readLinkActions() {
-  const m = location.hash.match(/(?:^#|&)do=([^&]+)/);
+// "#do=" plain base64url JSON, "#dz=" the same gzip-compressed (for whole data sets).
+async function readLinkActions() {
+  const m = location.hash.match(/(?:^#|&)(do|dz)=([^&]+)/);
   if (!m) return null;
   history.replaceState(null, '', location.pathname + location.search);
   try {
-    const b64 = decodeURIComponent(m[1]).replace(/-/g, '+').replace(/_/g, '/');
-    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const b64 = decodeURIComponent(m[2]).replace(/-/g, '+').replace(/_/g, '/');
+    let bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    if (m[1] === 'dz') {
+      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+      bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+    }
     const data = JSON.parse(new TextDecoder().decode(bytes));
     return Array.isArray(data) ? data : null;
   } catch (e) {
     console.error(e);
     return null;
   }
+}
+
+/** Link that carries all data of this app (for moving it to another device / URL). */
+async function stateLink() {
+  const data = { ...state, sync: { calendarId: null, ttMap: {}, lastExport: null } };
+  const bytes = new TextEncoder().encode(JSON.stringify([{ t: 'state', data }]));
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+  const gz = new Uint8Array(await new Response(stream).arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < gz.length; i += 0x8000) bin += String.fromCharCode(...gz.subarray(i, i + 0x8000));
+  const b64 = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return `${location.origin}${location.pathname}#dz=${b64}`;
 }
 
 /** Add or update one exam term; returns its id. */
@@ -1205,10 +1230,18 @@ document.addEventListener('click', async (e) => {
       case 'tt-disconnect': TT.disconnectTickTick(); return render();
       case 'export-tt': return await exportTickTick();
       case 'copy-tasks': {
-        const { tasks } = buildOutputs(state, currentPlanRows());
-        const text = tasks.map((t) => `${t.title} – ${fmtDate(t.date)}${t.time ? ' ' + t.time : ''}`).join('\n');
-        await navigator.clipboard.writeText(text);
-        return toast('Skopírované – v TickTicku vlož do poľa novej úlohy');
+        const text = ticktickLines().join('\n');
+        try { await navigator.clipboard.writeText(text); } catch (e) {
+          const ta = document.getElementById('ttText');
+          ta.select();
+          document.execCommand('copy');
+        }
+        return toast('📋 Skopírované – vlož to v TickTicku do poľa novej úlohy', 3500);
+      }
+      case 'copy-state-link': {
+        const link = await stateLink();
+        try { await navigator.clipboard.writeText(link); toast('🔗 Odkaz skopírovaný – otvor ho v inom prehliadači / mobile', 4000); } catch (e) { prompt('Skopíruj odkaz:', link); }
+        return;
       }
       case 'save-conn': {
         localStorage.setItem('rozvrhar:gcid', document.getElementById('gcid').value.trim());
@@ -1351,8 +1384,8 @@ if (tt) {
 }
 render();
 
-function handleLink() {
-  const actions = readLinkActions();
+async function handleLink() {
+  const actions = await readLinkActions();
   if (!actions) return;
   runLinkActions(actions).then(() => toast('✅ Zmeny z odkazu sú pridané – skontroluj ich', 4000))
     .catch((e) => { console.error(e); toast(`Odkaz sa nepodarilo použiť: ${e.message}`, 5000); });
