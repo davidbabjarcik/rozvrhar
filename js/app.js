@@ -905,7 +905,11 @@ async function runLinkActions(actions) {
     if (a.t === 'short') { subj.short = a.short; subj.shortAuto = false; continue; }
     if (a.t === 'item') {
       const same = findItem(subj, a.title);
-      if (same) { Object.assign(same, { when: a.when, ...(a.slot ? { slot: a.slot } : {}) }); mark(subj, same); continue; }
+      if (same) {
+        Object.assign(same, { when: a.when, ...(a.slot ? { slot: a.slot } : {}), ...(a.note != null ? { note: a.note } : {}) });
+        mark(subj, same);
+        continue;
+      }
       const it = { id: uid(), kind: a.kind || 'test', title: a.title, when: a.when, time: a.time || '', note: a.note || '', slot: a.slot, auto: true };
       subj.items.push(it);
       mark(subj, it);
@@ -916,11 +920,21 @@ async function runLinkActions(actions) {
         subj.items.push(orig);
       }
       const opts = (a.options || []).map((w) => ({ when: String(w), label: /^\d+$/.test(String(w)) ? `${w}. týždeň` : String(w) }));
+      // The teacher's own schedule beats what was read from the document.
+      if (a.replaceOptions && opts.length) orig.retakes = opts;
       const known = orig.retakes && orig.retakes.length ? orig.retakes : null;
       const r = toggleRetake(subj, orig, { when: a.when, options: known || (opts.length ? opts : undefined), force: true });
       if (a.slot) { r.slot = a.slot; r.classId = ''; }
       mark(subj, orig);
       mark(subj, r);
+    } else if (a.t === 'retakeOptions') {
+      // Only say when a retake would be; the "Idem na opravu" button then uses it.
+      const orig = findItem(subj, a.of);
+      if (!orig) { report.notes.push(`Nenašiel som „${a.of}“ v predmete ${subj.name}.`); continue; }
+      orig.retakes = (a.options || []).map((w) => ({ when: String(w), label: `${w}. týždeň` }));
+      const r = retakeOf(subj, orig);
+      if (r) { r.retakes = orig.retakes; if (!orig.retakes.some((o) => o.when === r.when)) r.when = orig.retakes[0]?.when || r.when; }
+      mark(subj, orig);
     }
   }
   for (const [subj, ids] of touched) report.entries.push({ kind: 'course', file: 'odkaz', subjectId: subj.id, itemIds: ids, examIds: [] });
