@@ -903,6 +903,14 @@ async function runLinkActions(actions) {
       continue;
     }
     if (a.t === 'short') { subj.short = a.short; subj.shortAuto = false; continue; }
+    if (a.t === 'remove') {
+      const h = normalizeName(a.title);
+      const before = subj.items.length;
+      subj.items = subj.items.filter((x) => normalizeName(x.title) !== h);
+      if (subj.items.length === before) report.notes.push(`„${a.title}“ v predmete ${subj.name} už nie je.`);
+      else report.notes.push(`Odstránené: ${a.title} (${subj.short || subj.name}).`);
+      continue;
+    }
     if (a.t === 'item') {
       const same = findItem(subj, a.title);
       if (same) {
